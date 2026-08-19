@@ -1,0 +1,1837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Drum Stick Hand-Coordination Trainer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --cyan-hand: #00e5ff;
+      --orange-hand: #ff6d00;
+      --bg-dark: #080c16;
+      --panel-bg: #111827;
+      --card-bg: #1e293b;
+      --border-color: #334155;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+      overflow-x: hidden;
+    }
+
+    .font-display { font-family: 'Chakra Petch', sans-serif; }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
+
+    .app-container {
+      width: 100%;
+      max-width: 1280px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    /* Glow Utilities */
+    .glow-cyan { box-shadow: 0 0 15px rgba(0, 229, 255, 0.4); }
+    .glow-orange { box-shadow: 0 0 15px rgba(255, 109, 0, 0.4); }
+    .glow-gold { box-shadow: 0 0 20px rgba(255, 215, 0, 0.4); }
+
+    /* Header */
+    header {
+      background: linear-gradient(135deg, #111827 0%, #0f172a 100%);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 16px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+
+    .logo-box {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .logo-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--cyan-hand), var(--orange-hand));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      box-shadow: 0 0 16px rgba(0, 229, 255, 0.35);
+    }
+
+    .title-area h1 {
+      font-size: 1.35rem;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      color: #fff;
+    }
+
+    .badge-pill {
+      font-size: 0.65rem;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-weight: 700;
+      background: rgba(0, 229, 255, 0.15);
+      color: var(--cyan-hand);
+      border: 1px solid rgba(0, 229, 255, 0.4);
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    .hand-legend {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: rgba(0, 0, 0, 0.45);
+      padding: 8px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 0.78rem;
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 6px;
+    }
+
+    /* Visual Metronome Panel */
+    .metronome-card {
+      background: linear-gradient(135deg, #111827 0%, #172033 100%);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .flash-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.08s ease-out;
+    }
+
+    .flash-overlay.active {
+      opacity: 1;
+      background: rgba(255, 255, 255, 0.18);
+      border: 2px solid #fff;
+    }
+
+    .metro-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding-bottom: 10px;
+    }
+
+    .beat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin: 4px 0;
+    }
+
+    .beat-box {
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 14px;
+      padding: 14px 8px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.1s ease;
+    }
+
+    .beat-circle {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      font-weight: 800;
+      background: #334155;
+      color: #94a3b8;
+      margin-bottom: 6px;
+      transition: all 0.08s ease;
+    }
+
+    .beat-box.active {
+      background: rgba(0, 229, 255, 0.15);
+      border-color: var(--cyan-hand);
+      transform: scale(1.04);
+      box-shadow: 0 0 20px rgba(0, 229, 255, 0.35);
+    }
+
+    .beat-box.active .beat-circle {
+      background: linear-gradient(135deg, var(--cyan-hand), #0284c7);
+      color: #000;
+      box-shadow: 0 0 15px var(--cyan-hand);
+    }
+
+    .beat-box.downbeat.active {
+      background: rgba(255, 215, 0, 0.2);
+      border-color: #ffd700;
+      box-shadow: 0 0 25px rgba(255, 215, 0, 0.45);
+    }
+
+    .beat-box.downbeat.active .beat-circle {
+      background: linear-gradient(135deg, #ffd700, #f59e0b);
+      color: #000;
+      box-shadow: 0 0 20px #ffd700;
+    }
+
+    /* Subdivisions Strip */
+    .subdivision-strip {
+      background: rgba(0, 0, 0, 0.55);
+      border-radius: 10px;
+      padding: 8px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .sub-grid {
+      display: grid;
+      grid-template-columns: repeat(16, 1fr);
+      gap: 4px;
+      margin-top: 4px;
+    }
+
+    .sub-cell {
+      height: 28px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.72rem;
+      font-weight: 700;
+      background: #1e293b;
+      color: #64748b;
+      transition: all 0.05s;
+    }
+
+    .sub-cell.active {
+      background: var(--cyan-hand);
+      color: #000;
+      font-weight: 800;
+      transform: scale(1.1);
+      box-shadow: 0 0 10px var(--cyan-hand);
+      z-index: 2;
+    }
+
+    .sub-cell.quarter {
+      border-top: 2px solid #64748b;
+      color: #cbd5e1;
+    }
+
+    .sub-cell.active.quarter {
+      background: #ffd700;
+      box-shadow: 0 0 12px #ffd700;
+    }
+
+    /* Main Stage: Highway + Drum Kit */
+    .main-stage {
+      display: grid;
+      grid-template-columns: 1.2fr 0.9fr;
+      gap: 18px;
+    }
+
+    @media (max-width: 980px) {
+      .main-stage {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Rhythm Highway */
+    .highway-card {
+      background: #0f172a;
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 15px 30px -5px rgba(0, 0, 0, 0.6);
+    }
+
+    .lane-headers {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .lane-banner {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      font-weight: 700;
+    }
+
+    .lane-banner.cyan {
+      background: rgba(0, 229, 255, 0.08);
+      border-color: rgba(0, 229, 255, 0.4);
+      color: var(--cyan-hand);
+    }
+
+    .lane-banner.orange {
+      background: rgba(255, 109, 0, 0.08);
+      border-color: rgba(255, 109, 0, 0.4);
+      color: var(--orange-hand);
+    }
+
+    .canvas-container {
+      width: 100%;
+      height: 380px;
+      background: #090e1a;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+      position: relative;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Strike Buttons */
+    .strike-pads {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .pad-btn {
+      padding: 14px;
+      border-radius: 12px;
+      border: 2px solid;
+      cursor: pointer;
+      font-weight: 800;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      user-select: none;
+      transition: all 0.08s ease;
+    }
+
+    .pad-btn:active {
+      transform: scale(0.96);
+    }
+
+    .pad-btn.cyan {
+      background: linear-gradient(180deg, rgba(0, 229, 255, 0.25) 0%, rgba(0, 229, 255, 0.08) 100%);
+      border-color: var(--cyan-hand);
+      color: #e0f2fe;
+    }
+
+    .pad-btn.cyan:hover {
+      background: linear-gradient(180deg, rgba(0, 229, 255, 0.35) 0%, rgba(0, 229, 255, 0.15) 100%);
+      box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+    }
+
+    .pad-btn.orange {
+      background: linear-gradient(180deg, rgba(255, 109, 0, 0.25) 0%, rgba(255, 109, 0, 0.08) 100%);
+      border-color: var(--orange-hand);
+      color: #ffedd5;
+    }
+
+    .pad-btn.orange:hover {
+      background: linear-gradient(180deg, rgba(255, 109, 0, 0.35) 0%, rgba(255, 109, 0, 0.15) 100%);
+      box-shadow: 0 0 15px rgba(255, 109, 0, 0.4);
+    }
+
+    /* Drum Kit Top-Down Card */
+    .drumkit-card {
+      background: #0f172a;
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .kit-view {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 0;
+      transition: transform 0.3s ease;
+    }
+
+    .kit-row {
+      width: 100%;
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+    }
+
+    .drum-head {
+      border-radius: 50%;
+      border: 2px solid;
+      background: linear-gradient(135deg, #1e293b, #0f172a);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.08s ease;
+      position: relative;
+    }
+
+    .drum-head:hover {
+      filter: brightness(1.2);
+    }
+
+    .drum-head:active, .drum-head.hit {
+      transform: scale(1.08);
+      border-color: #fff !important;
+      background: #fff !important;
+      color: #000 !important;
+      box-shadow: 0 0 35px var(--cyan-hand);
+    }
+
+    .drum-head.hit.orange-glow {
+      box-shadow: 0 0 35px var(--orange-hand);
+    }
+
+    .drum-label {
+      font-size: 0.72rem;
+      font-weight: 800;
+    }
+
+    .drum-tag {
+      font-size: 0.58rem;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+
+    /* Master Practice Controls */
+    .controls-card {
+      background: linear-gradient(135deg, #111827 0%, #172033 100%);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .ctrl-ribbon {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .btn {
+      padding: 10px 18px;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 0.85rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.1s ease;
+      user-select: none;
+    }
+
+    .btn:active { transform: scale(0.96); }
+
+    .btn-play {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      font-size: 0.95rem;
+      padding: 12px 24px;
+      box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
+    }
+
+    .btn-play.playing {
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+      box-shadow: 0 0 20px rgba(245, 158, 11, 0.4);
+      color: #000;
+    }
+
+    .btn-secondary {
+      background: #1e293b;
+      border-color: #334155;
+      color: #e2e8f0;
+    }
+
+    .btn-secondary:hover {
+      background: #334155;
+    }
+
+    .mode-toggle {
+      display: flex;
+      background: #090e1a;
+      border-radius: 10px;
+      padding: 3px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .mode-btn {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: none;
+      background: transparent;
+      color: #94a3b8;
+      font-weight: 700;
+      font-size: 0.78rem;
+      cursor: pointer;
+      transition: all 0.1s ease;
+    }
+
+    .mode-btn.active {
+      background: var(--cyan-hand);
+      color: #000;
+      box-shadow: 0 0 10px var(--cyan-hand);
+    }
+
+    /* Tempo row */
+    .tempo-row {
+      background: rgba(0, 0, 0, 0.45);
+      border-radius: 12px;
+      padding: 12px 16px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 16px;
+      align-items: center;
+    }
+
+    @media (max-width: 768px) {
+      .tempo-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--cyan-hand);
+      cursor: pointer;
+    }
+
+    /* Step Sequencer & Beat Library */
+    .sequencer-card {
+      background: #0f172a;
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .category-pills {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .pill-btn {
+      padding: 5px 12px;
+      border-radius: 9999px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #94a3b8;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.1s ease;
+    }
+
+    .pill-btn.active {
+      background: var(--cyan-hand);
+      color: #000;
+      font-weight: 800;
+      box-shadow: 0 0 10px var(--cyan-hand);
+    }
+
+    .beat-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 10px;
+    }
+
+    .beat-card-item {
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 10px 12px;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.1s ease;
+    }
+
+    .beat-card-item:hover {
+      border-color: #64748b;
+      background: #1e293b;
+    }
+
+    .beat-card-item.selected {
+      background: rgba(0, 229, 255, 0.12);
+      border-color: var(--cyan-hand);
+      box-shadow: 0 0 12px rgba(0, 229, 255, 0.25);
+    }
+
+    .matrix-wrapper {
+      overflow-x: auto;
+      background: #080d1a;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 12px;
+    }
+
+    .matrix-row {
+      display: grid;
+      grid-template-columns: 130px repeat(16, 1fr);
+      gap: 4px;
+      margin-bottom: 4px;
+      align-items: center;
+    }
+
+    .row-header {
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid;
+      font-size: 0.75rem;
+      font-weight: 700;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .step-btn {
+      height: 32px;
+      border-radius: 6px;
+      border: 1px solid #1e293b;
+      background: #0f172a;
+      cursor: pointer;
+      transition: all 0.05s;
+    }
+
+    .step-btn:hover {
+      border-color: #475569;
+    }
+
+    .step-btn.active.cyan-active {
+      background: var(--cyan-hand);
+      border-color: #fff;
+      box-shadow: 0 0 8px var(--cyan-hand);
+    }
+
+    .step-btn.active.orange-active {
+      background: var(--orange-hand);
+      border-color: #fff;
+      box-shadow: 0 0 8px var(--orange-hand);
+    }
+
+    .step-btn.current {
+      outline: 2px solid #ffd700;
+      outline-offset: 1px;
+    }
+
+    /* Stats Banner */
+    .stats-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 12px;
+      background: rgba(0, 0, 0, 0.6);
+      border-radius: 12px;
+      padding: 12px 16px;
+      border: 1px solid rgba(255, 109, 0, 0.3);
+    }
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .stat-label {
+      font-size: 0.68rem;
+      color: #94a3b8;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .stat-val {
+      font-size: 1.3rem;
+      font-weight: 800;
+      font-family: 'Chakra Petch', sans-serif;
+    }
+
+    footer {
+      text-align: center;
+      font-size: 0.78rem;
+      color: #64748b;
+      padding: 16px 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="app-container">
+
+    <!-- Top Header -->
+    <header>
+      <div class="logo-box">
+        <div class="logo-icon">🥁</div>
+        <div class="title-area">
+          <h1 class="font-display">DRUM STICK HAND-COORDINATION TRAINER <span class="badge-pill font-mono">STANDALONE</span></h1>
+          <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 2px;">
+            Split-Hand Training: <strong>Hand 1</strong> = Floor Tom & Bass • <strong>Hand 2</strong> = Snare & Cymbals • Visual-First Deaf Accessible
+          </p>
+        </div>
+      </div>
+
+      <div class="hand-legend font-mono">
+        <div>
+          <span class="legend-dot" style="background: var(--cyan-hand); box-shadow: 0 0 8px var(--cyan-hand);"></span>
+          <strong id="legend-left-label" style="color: var(--cyan-hand);">LEFT STICK</strong> [D / F]
+        </div>
+        <span style="color: #475569;">|</span>
+        <div>
+          <span class="legend-dot" style="background: var(--orange-hand); box-shadow: 0 0 8px var(--orange-hand);"></span>
+          <strong id="legend-right-label" style="color: var(--orange-hand);">RIGHT STICK</strong> [J / K]
+        </div>
+      </div>
+    </header>
+
+    <!-- Visual Metronome Card -->
+    <div class="metronome-card">
+      <div id="flash-overlay" class="flash-overlay"></div>
+
+      <div class="metro-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span class="badge-pill font-mono" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border-color: #059669;">
+            ● VISUAL METRONOME
+          </span>
+          <span id="speed-trainer-badge" class="badge-pill font-mono" style="display: none; background: rgba(245, 158, 11, 0.2); color: #fbbf24; border-color: #d97706;">
+            ⚡ SPEED TRAINER ACTIVE
+          </span>
+        </div>
+
+        <div style="font-size: 0.78rem; font-family: 'JetBrains Mono', monospace;">
+          <span id="hand-rule-banner" style="color: var(--orange-hand); font-weight: 700;">RIGHT HAND: Floor Tom & Bass</span> | 
+          <span id="hand-rule-other" style="color: var(--cyan-hand); font-weight: 700;">LEFT HAND: Snare & Cymbals</span>
+        </div>
+      </div>
+
+      <!-- Beat Circles (1, 2, 3, 4) -->
+      <div class="beat-grid">
+        <div class="beat-box downbeat" id="beat-0">
+          <div class="beat-circle font-display">1</div>
+          <span class="font-mono" style="font-size: 0.72rem; font-weight: 700; color: #cbd5e1;">DOWNBEAT</span>
+        </div>
+        <div class="beat-box" id="beat-1">
+          <div class="beat-circle font-display">2</div>
+          <span class="font-mono" style="font-size: 0.72rem; font-weight: 700; color: #cbd5e1;">BEAT 2</span>
+        </div>
+        <div class="beat-box" id="beat-2">
+          <div class="beat-circle font-display">3</div>
+          <span class="font-mono" style="font-size: 0.72rem; font-weight: 700; color: #cbd5e1;">BEAT 3</span>
+        </div>
+        <div class="beat-box" id="beat-3">
+          <div class="beat-circle font-display">4</div>
+          <span class="font-mono" style="font-size: 0.72rem; font-weight: 700; color: #cbd5e1;">BEAT 4</span>
+        </div>
+      </div>
+
+      <!-- 16th Note Subdivisions (1 e & a) -->
+      <div class="subdivision-strip">
+        <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: #94a3b8; font-family: 'JetBrains Mono', monospace;">
+          <span>16TH-NOTE SUBDIVISION PULSE</span>
+          <span id="bar-counter-label">BAR: #1</span>
+        </div>
+        <div class="sub-grid" id="subdivision-grid">
+          <!-- 16 cells dynamically generated -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Stage (Highway + Top-Down Kit) -->
+    <div class="main-stage">
+      
+      <!-- Rhythm Highway -->
+      <div class="highway-card">
+        <div class="lane-headers">
+          <div class="lane-banner" id="left-lane-banner">
+            <span>✦ LEFT STICK LANE</span>
+            <span class="font-mono" id="left-lane-tag" style="font-size: 0.7rem;">SNARE/CYMBALS</span>
+          </div>
+          <div class="lane-banner" id="right-lane-banner">
+            <span>✦ RIGHT STICK LANE</span>
+            <span class="font-mono" id="right-lane-tag" style="font-size: 0.7rem;">FLOOR & BASS</span>
+          </div>
+        </div>
+
+        <div class="canvas-container">
+          <canvas id="highway-canvas" width="600" height="380"></canvas>
+        </div>
+
+        <!-- Strike Pads -->
+        <div class="strike-pads">
+          <button class="pad-btn" id="left-strike-pad" onclick="handleUserStrike('LEFT')">
+            <span class="font-display" style="font-size: 1rem;">LEFT STICK STRIKE</span>
+            <span class="font-mono" style="font-size: 0.72rem; color: #94a3b8;">Key: [ D ] or [ F ]</span>
+          </button>
+          <button class="pad-btn" id="right-strike-pad" onclick="handleUserStrike('RIGHT')">
+            <span class="font-display" style="font-size: 1rem;">RIGHT STICK STRIKE</span>
+            <span class="font-mono" style="font-size: 0.72rem; color: #94a3b8;">Key: [ J ] or [ K ]</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Top-Down Drum Kit Visualizer -->
+      <div class="drumkit-card">
+        <div style="width: 100%; display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 8px;">
+          <span class="font-display" style="font-size: 0.85rem; font-weight: 700; color: #e2e8f0;">DRUM KIT VIEW</span>
+          <span id="handedness-label-kit" class="font-mono" style="font-size: 0.7rem; color: #94a3b8;">RIGHT-HANDED SETUP</span>
+        </div>
+
+        <div class="kit-view" id="kit-view-container">
+          <!-- Top Row: Crash, High Tom, Mid Tom, Ride -->
+          <div class="kit-row">
+            <div class="drum-head" id="head-crash" style="width: 70px; height: 70px; border-color: #eab308;" onclick="triggerManualDrum('crash')">
+              <span class="drum-label font-display" style="color: #fef08a;">CRASH</span>
+              <span class="drum-tag font-mono" id="tag-crash">LH</span>
+            </div>
+            <div class="drum-head" id="head-high_tom" style="width: 62px; height: 62px; border-color: #00e5ff;" onclick="triggerManualDrum('high_tom')">
+              <span class="drum-label font-display" style="color: #67e8f9;">H.TOM</span>
+              <span class="drum-tag font-mono" id="tag-high_tom">LH</span>
+            </div>
+            <div class="drum-head" id="head-mid_tom" style="width: 66px; height: 66px; border-color: #00e5ff;" onclick="triggerManualDrum('mid_tom')">
+              <span class="drum-label font-display" style="color: #67e8f9;">M.TOM</span>
+              <span class="drum-tag font-mono" id="tag-mid_tom">LH</span>
+            </div>
+            <div class="drum-head" id="head-ride" style="width: 74px; height: 74px; border-color: #eab308;" onclick="triggerManualDrum('ride')">
+              <span class="drum-label font-display" style="color: #fef08a;">RIDE</span>
+              <span class="drum-tag font-mono" id="tag-ride">LH</span>
+            </div>
+          </div>
+
+          <!-- Mid Row: Hi-Hat, Snare, Floor Tom -->
+          <div class="kit-row">
+            <div class="drum-head" id="head-hihat_closed" style="width: 68px; height: 68px; border-color: #38bdf8;" onclick="triggerManualDrum('hihat_closed')">
+              <span class="drum-label font-display" style="color: #bae6fd;">HI-HAT</span>
+              <span class="drum-tag font-mono" id="tag-hihat_closed">LH</span>
+            </div>
+            <div class="drum-head" id="head-snare" style="width: 76px; height: 76px; border-color: #00e5ff;" onclick="triggerManualDrum('snare')">
+              <span class="drum-label font-display" style="color: #67e8f9;">SNARE</span>
+              <span class="drum-tag font-mono" id="tag-snare">LH</span>
+            </div>
+            <div class="drum-head" id="head-floor_tom" style="width: 82px; height: 82px; border-color: #ff6d00;" onclick="triggerManualDrum('floor_tom')">
+              <span class="drum-label font-display" style="color: #fdba74;">FLOOR TOM</span>
+              <span class="drum-tag font-mono" id="tag-floor_tom">RH</span>
+            </div>
+          </div>
+
+          <!-- Bottom: Bass Drum (Kick) -->
+          <div class="kit-row" style="justify-content: center;">
+            <div class="drum-head" id="head-bass" style="width: 95px; height: 95px; border-color: #ff6d00;" onclick="triggerManualDrum('bass')">
+              <span class="drum-label font-display" style="color: #fdba74; font-size: 0.85rem;">BASS DRUM</span>
+              <span class="drum-tag font-mono" id="tag-bass">RH</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size: 0.72rem; color: #94a3b8; text-align: center; font-family: 'JetBrains Mono', monospace;">
+          Click any drumhead above to audition synthesized sound & lighting.
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Master Controls & Tempo -->
+    <div class="controls-card">
+      <div class="ctrl-ribbon">
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn btn-play font-display" id="play-btn" onclick="togglePlay()">
+            <span id="play-icon">▶</span> <span id="play-text">START TRAINER</span>
+          </button>
+          <button class="btn btn-secondary" onclick="resetPlayback()" title="Reset to Start">↺ Reset</button>
+        </div>
+
+        <!-- Mode Toggle -->
+        <div class="mode-toggle">
+          <button class="mode-btn active font-display" id="mode-watch" onclick="setPracticeMode(false)">WATCH / DEMO</button>
+          <button class="mode-btn font-display" id="mode-practice" onclick="setPracticeMode(true)">PRACTICE HIT MODE</button>
+        </div>
+
+        <!-- Handedness Switch -->
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary font-mono" id="handedness-btn" onclick="toggleHandedness()">
+            🤚 RIGHT-HANDED
+          </button>
+          <button class="btn btn-secondary font-mono" onclick="toggleInvertHands()" title="Swap Hand 1 and Hand 2 assignments">
+            ⇄ Swap Hands
+          </button>
+        </div>
+      </div>
+
+      <!-- Tempo Row -->
+      <div class="tempo-row">
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 700;">
+            <span class="font-display" style="color: #cbd5e1;">TEMPO ADJUSTMENT</span>
+            <span class="font-mono" style="color: var(--cyan-hand); font-size: 1.1rem;" id="bpm-label">95 BPM</span>
+          </div>
+          <input type="range" id="bpm-slider" min="30" max="240" value="95" oninput="updateBpm(this.value)">
+        </div>
+
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-secondary font-mono" style="padding: 6px 12px;" onclick="adjustBpm(-5)">-5</button>
+          <button class="btn btn-secondary font-mono" style="padding: 6px 12px;" onclick="adjustBpm(5)">+5</button>
+          <button class="btn btn-secondary font-mono" style="padding: 6px 12px;" onclick="tapTempo()">TAP TEMPO</button>
+        </div>
+
+        <!-- Speed Trainer Toggle -->
+        <div style="display: flex; align-items: center; gap: 8px; border-left: 1px solid #334155; padding-left: 14px;">
+          <label style="font-size: 0.78rem; font-weight: 700; color: #fbbf24; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+            <input type="checkbox" id="speed-trainer-chk" onchange="toggleSpeedTrainer(this.checked)">
+            AUTO SPEED TRAINER
+          </label>
+          <button class="btn btn-secondary font-mono" id="audio-toggle-btn" style="padding: 6px 10px; font-size: 0.72rem;" onclick="toggleMute()">
+            🔊 Audio ON
+          </button>
+        </div>
+      </div>
+
+      <!-- Practice Statistics (Visible in Practice Hit Mode) -->
+      <div class="stats-bar" id="stats-container" style="display: none;">
+        <div class="stat-item">
+          <span class="stat-label">ACCURACY</span>
+          <span class="stat-val" style="color: #34d399;" id="stat-acc">100%</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">PERFECT HITS</span>
+          <span class="stat-val" style="color: var(--cyan-hand);" id="stat-perf">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">EARLY / LATE</span>
+          <span class="stat-val" style="color: #fbbf24;" id="stat-timing">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">MAX STREAK</span>
+          <span class="stat-val" style="color: var(--orange-hand);" id="stat-streak">0 🔥</span>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: flex-end;">
+          <button class="btn btn-secondary font-mono" style="font-size: 0.72rem; padding: 6px 12px;" onclick="resetStats()">Reset Score</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Beat Library & Step Sequencer -->
+    <div class="sequencer-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
+        <h2 class="font-display" style="font-size: 1.1rem; font-weight: 800; color: #fff;">BEAT LIBRARY & STEP SEQUENCER</h2>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary font-mono" style="font-size: 0.75rem; padding: 6px 12px;" onclick="randomizePattern()">✨ Randomize</button>
+          <button class="btn btn-secondary font-mono" style="font-size: 0.75rem; padding: 6px 12px;" onclick="clearGrid()">🗑 Clear</button>
+        </div>
+      </div>
+
+      <!-- Categories -->
+      <div class="category-pills" id="category-pills-container">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- Preset Grid -->
+      <div class="beat-list" id="preset-beats-list">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- 16-Step Matrix -->
+      <div class="matrix-wrapper">
+        <div id="matrix-container">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer>
+      <span>Keyboard Shortcuts: <strong style="color: var(--cyan-hand)">[D] / [F]</strong> = Left Stick | <strong style="color: var(--orange-hand)">[J] / [K]</strong> = Right Stick | <strong>[Space]</strong> = Play/Pause</span>
+      <span>100% Client-Side Web Audio & Canvas Synthesizer • Standalone File</span>
+    </footer>
+
+  </div>
+
+  <script>
+    // --- 1. WEB AUDIO SYNTHESIZER ---
+    class DrumAudioEngine {
+      constructor() {
+        this.ctx = null;
+        this.isMuted = false;
+      }
+
+      init() {
+        if (!this.ctx) {
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          this.ctx = new AudioContextClass();
+        }
+        if (this.ctx && this.ctx.state === 'suspended') {
+          this.ctx.resume();
+        }
+      }
+
+      play(inst) {
+        if (this.isMuted) return;
+        this.init();
+        if (!this.ctx) return;
+        const t = this.ctx.currentTime;
+
+        if (inst === 'bass') {
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.frequency.setValueAtTime(130, t);
+          osc.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+          gain.gain.setValueAtTime(1.0, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.36);
+        } else if (inst === 'floor_tom') {
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.frequency.setValueAtTime(95, t);
+          osc.frequency.exponentialRampToValueAtTime(60, t + 0.25);
+          gain.gain.setValueAtTime(0.9, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.46);
+        } else if (inst === 'snare') {
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(185, t);
+          osc.frequency.exponentialRampToValueAtTime(110, t + 0.08);
+          gain.gain.setValueAtTime(0.7, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.17);
+          this.noiseBurst(t, 1200, 0.22, 0.7);
+        } else if (inst === 'hihat_closed') {
+          this.noiseBurst(t, 8000, 0.045, 0.6);
+        } else if (inst === 'hihat_open') {
+          this.noiseBurst(t, 7500, 0.35, 0.7);
+        } else if (inst === 'high_tom') {
+          this.tomTone(t, 175, 110, 0.28);
+        } else if (inst === 'mid_tom') {
+          this.tomTone(t, 135, 85, 0.32);
+        } else if (inst === 'crash') {
+          this.noiseBurst(t, 4500, 1.1, 0.85);
+        } else if (inst === 'ride') {
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.frequency.setValueAtTime(620, t);
+          gain.gain.setValueAtTime(0.4, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.46);
+          this.noiseBurst(t, 9000, 0.65, 0.45);
+        }
+      }
+
+      tomTone(t, startFreq, endFreq, decay) {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.frequency.setValueAtTime(startFreq, t);
+        osc.frequency.exponentialRampToValueAtTime(endFreq, t + decay * 0.7);
+        gain.gain.setValueAtTime(0.8, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + decay);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(t);
+        osc.stop(t + decay + 0.02);
+      }
+
+      noiseBurst(t, freq, decay, vol) {
+        const bufSize = this.ctx.sampleRate * decay;
+        const buffer = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+
+        const src = this.ctx.createBufferSource();
+        src.buffer = buffer;
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'highpass';
+        filter.frequency.setValueAtTime(freq, t);
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(vol, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + decay);
+
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+        src.start(t);
+        src.stop(t + decay + 0.01);
+      }
+    }
+
+    const audio = new DrumAudioEngine();
+
+    // --- 2. PRESET BEATS DATA ---
+    const PRESETS = [
+      {
+        id: 'rock-basic',
+        title: 'Rock 8th-Beat',
+        category: 'Rock & Pop',
+        bpm: 95,
+        notes: [
+          {step: 0, inst: 'hihat_closed'}, {step: 2, inst: 'hihat_closed'}, {step: 4, inst: 'hihat_closed'},
+          {step: 6, inst: 'hihat_closed'}, {step: 8, inst: 'hihat_closed'}, {step: 10, inst: 'hihat_closed'},
+          {step: 12, inst: 'hihat_closed'}, {step: 14, inst: 'hihat_closed'},
+          {step: 0, inst: 'bass'}, {step: 8, inst: 'bass'}, {step: 10, inst: 'bass'},
+          {step: 4, inst: 'snare'}, {step: 12, inst: 'snare'}
+        ]
+      },
+      {
+        id: 'disco-four',
+        title: 'Four-on-the-Floor Club',
+        category: 'Rock & Pop',
+        bpm: 120,
+        notes: [
+          {step: 0, inst: 'bass'}, {step: 4, inst: 'bass'}, {step: 8, inst: 'bass'}, {step: 12, inst: 'bass'},
+          {step: 4, inst: 'snare'}, {step: 12, inst: 'snare'},
+          {step: 2, inst: 'hihat_open'}, {step: 6, inst: 'hihat_open'}, {step: 10, inst: 'hihat_open'}, {step: 14, inst: 'hihat_open'}
+        ]
+      },
+      {
+        id: 'tribal-floor-tom',
+        title: 'Tribal Floor Tom Pounding',
+        category: 'Floor Tom Heavy',
+        bpm: 105,
+        notes: [
+          {step: 0, inst: 'floor_tom'}, {step: 2, inst: 'floor_tom'}, {step: 4, inst: 'floor_tom'}, {step: 6, inst: 'floor_tom'},
+          {step: 8, inst: 'floor_tom'}, {step: 10, inst: 'floor_tom'}, {step: 12, inst: 'floor_tom'}, {step: 14, inst: 'floor_tom'},
+          {step: 0, inst: 'bass'}, {step: 3, inst: 'bass'}, {step: 6, inst: 'bass'}, {step: 8, inst: 'bass'}, {step: 11, inst: 'bass'},
+          {step: 4, inst: 'snare'}, {step: 12, inst: 'snare'}, {step: 14, inst: 'hihat_open'}
+        ]
+      },
+      {
+        id: 'swing-tom-krupa',
+        title: 'Krupa Big Band Tom Roll',
+        category: 'Floor Tom Heavy',
+        bpm: 130,
+        notes: [
+          {step: 0, inst: 'floor_tom'}, {step: 2, inst: 'floor_tom'}, {step: 3, inst: 'floor_tom'}, {step: 4, inst: 'floor_tom'},
+          {step: 6, inst: 'floor_tom'}, {step: 7, inst: 'floor_tom'}, {step: 8, inst: 'floor_tom'}, {step: 10, inst: 'floor_tom'},
+          {step: 11, inst: 'floor_tom'}, {step: 12, inst: 'floor_tom'}, {step: 14, inst: 'floor_tom'}, {step: 15, inst: 'floor_tom'},
+          {step: 0, inst: 'bass'}, {step: 4, inst: 'bass'}, {step: 8, inst: 'bass'}, {step: 12, inst: 'bass'},
+          {step: 4, inst: 'snare'}, {step: 12, inst: 'snare'}
+        ]
+      },
+      {
+        id: 'funk-ghost',
+        title: '16th-Note Ghost Funk',
+        category: 'Funk & Syncopation',
+        bpm: 90,
+        notes: [
+          {step: 0, inst: 'hihat_closed'}, {step: 1, inst: 'hihat_closed'}, {step: 2, inst: 'hihat_closed'}, {step: 3, inst: 'hihat_closed'},
+          {step: 4, inst: 'hihat_closed'}, {step: 5, inst: 'hihat_closed'}, {step: 6, inst: 'hihat_open'}, {step: 8, inst: 'hihat_closed'},
+          {step: 9, inst: 'hihat_closed'}, {step: 10, inst: 'hihat_closed'}, {step: 11, inst: 'hihat_closed'}, {step: 12, inst: 'hihat_closed'},
+          {step: 0, inst: 'bass'}, {step: 3, inst: 'bass'}, {step: 7, inst: 'bass'}, {step: 10, inst: 'floor_tom'}, {step: 11, inst: 'bass'},
+          {step: 4, inst: 'snare'}, {step: 7, inst: 'snare'}, {step: 12, inst: 'snare'}, {step: 15, inst: 'snare'}
+        ]
+      },
+      {
+        id: 'jazz-swing-ride',
+        title: 'Jazz Swing & Feathered Bass',
+        category: 'Jazz & Swing',
+        bpm: 125,
+        notes: [
+          {step: 0, inst: 'ride'}, {step: 4, inst: 'ride'}, {step: 6, inst: 'ride'}, {step: 8, inst: 'ride'}, {step: 12, inst: 'ride'}, {step: 14, inst: 'ride'},
+          {step: 4, inst: 'hihat_closed'}, {step: 12, inst: 'hihat_closed'},
+          {step: 0, inst: 'bass'}, {step: 4, inst: 'bass'}, {step: 8, inst: 'bass'}, {step: 12, inst: 'bass'}, {step: 6, inst: 'floor_tom'}, {step: 14, inst: 'floor_tom'},
+          {step: 2, inst: 'snare'}, {step: 10, inst: 'snare'}
+        ]
+      },
+      {
+        id: 'bossa-samba',
+        title: 'Bossa Nova Hand Ostinato',
+        category: 'Latin & World',
+        bpm: 130,
+        notes: [
+          {step: 0, inst: 'bass'}, {step: 3, inst: 'floor_tom'}, {step: 4, inst: 'bass'}, {step: 7, inst: 'floor_tom'},
+          {step: 8, inst: 'bass'}, {step: 11, inst: 'floor_tom'}, {step: 12, inst: 'bass'}, {step: 15, inst: 'floor_tom'},
+          {step: 0, inst: 'hihat_closed'}, {step: 2, inst: 'hihat_closed'}, {step: 4, inst: 'hihat_closed'}, {step: 6, inst: 'hihat_closed'},
+          {step: 8, inst: 'hihat_closed'}, {step: 10, inst: 'hihat_closed'}, {step: 12, inst: 'hihat_closed'}, {step: 14, inst: 'hihat_closed'},
+          {step: 0, inst: 'snare'}, {step: 6, inst: 'snare'}, {step: 10, inst: 'snare'}, {step: 12, inst: 'snare'}
+        ]
+      },
+      {
+        id: 'metal-gallop',
+        title: 'Metal Gallop Drill',
+        category: 'Metal & Speed',
+        bpm: 145,
+        notes: [
+          {step: 0, inst: 'bass'}, {step: 2, inst: 'floor_tom'}, {step: 3, inst: 'bass'}, {step: 4, inst: 'bass'},
+          {step: 6, inst: 'floor_tom'}, {step: 7, inst: 'bass'}, {step: 8, inst: 'bass'}, {step: 10, inst: 'floor_tom'},
+          {step: 11, inst: 'bass'}, {step: 12, inst: 'bass'}, {step: 14, inst: 'floor_tom'}, {step: 15, inst: 'bass'},
+          {step: 0, inst: 'crash'}, {step: 4, inst: 'snare'}, {step: 8, inst: 'crash'}, {step: 12, inst: 'snare'}
+        ]
+      },
+      {
+        id: 'paradiddle-split',
+        title: 'Paradiddle Hand Split (RLRR LRLL)',
+        category: 'Stick Rudiments',
+        bpm: 100,
+        notes: [
+          {step: 0, inst: 'floor_tom'}, {step: 1, inst: 'snare'}, {step: 2, inst: 'bass'}, {step: 3, inst: 'floor_tom'},
+          {step: 4, inst: 'hihat_closed'}, {step: 5, inst: 'floor_tom'}, {step: 6, inst: 'snare'}, {step: 7, inst: 'hihat_closed'},
+          {step: 8, inst: 'bass'}, {step: 9, inst: 'snare'}, {step: 10, inst: 'floor_tom'}, {step: 11, inst: 'bass'},
+          {step: 12, inst: 'high_tom'}, {step: 13, inst: 'floor_tom'}, {step: 14, inst: 'snare'}, {step: 15, inst: 'hihat_open'}
+        ]
+      }
+    ];
+
+    const INSTRUMENTS = [
+      { id: 'crash', name: 'CRASH', short: 'CRASH', isFloorBass: false },
+      { id: 'ride', name: 'RIDE', short: 'RIDE', isFloorBass: false },
+      { id: 'hihat_open', name: 'OPEN HAT', short: 'O.HAT', isFloorBass: false },
+      { id: 'hihat_closed', name: 'CLOSED HAT', short: 'H.HAT', isFloorBass: false },
+      { id: 'high_tom', name: 'HIGH TOM', short: 'H.TOM', isFloorBass: false },
+      { id: 'mid_tom', name: 'MID TOM', short: 'M.TOM', isFloorBass: false },
+      { id: 'snare', name: 'SNARE', short: 'SNARE', isFloorBass: false },
+      { id: 'floor_tom', name: 'FLOOR TOM', short: 'F.TOM', isFloorBass: true },
+      { id: 'bass', name: 'BASS DRUM', short: 'BASS', isFloorBass: true },
+    ];
+
+    // --- 3. STATE ---
+    let currentPattern = PRESETS[0];
+    let isPlaying = false;
+    let bpm = 95;
+    let handedness = 'RIGHT_HANDED'; // 'RIGHT_HANDED' or 'LEFT_HANDED'
+    let invertHands = false;
+    let isPracticeMode = false;
+    let speedTrainer = false;
+    let currentStep = 0;
+    let currentBar = 1;
+    let barsUntilIncrement = 4;
+    let startTime = 0;
+    let animFrame = null;
+    let recentHits = [];
+
+    // Stats
+    let stats = { total: 0, perf: 0, early: 0, late: 0, streak: 0, maxStreak: 0 };
+
+    // --- 4. HAND ASSIGNMENT HELPER ---
+    // User Rule: Floor Tom & Bass on one hand, rest on the other.
+    function getInstrumentHand(instId) {
+      const isFloorBass = (instId === 'bass' || instId === 'floor_tom');
+      let hand = 'LEFT';
+      if (handedness === 'RIGHT_HANDED') {
+        hand = isFloorBass ? 'RIGHT' : 'LEFT';
+      } else {
+        hand = isFloorBass ? 'LEFT' : 'RIGHT';
+      }
+      if (invertHands) {
+        hand = hand === 'RIGHT' ? 'LEFT' : 'RIGHT';
+      }
+      return hand;
+    }
+
+    function getFloorBassHand() {
+      let hand = handedness === 'RIGHT_HANDED' ? 'RIGHT' : 'LEFT';
+      if (invertHands) hand = hand === 'RIGHT' ? 'LEFT' : 'RIGHT';
+      return hand;
+    }
+
+    // --- 5. RENDER UI HELPERS ---
+    function updateHandBadges() {
+      const fbHand = getFloorBassHand();
+      const otherHand = fbHand === 'RIGHT' ? 'LEFT' : 'RIGHT';
+
+      document.getElementById('hand-rule-banner').textContent = `${fbHand} HAND: Floor Tom & Bass`;
+      document.getElementById('hand-rule-other').textContent = `${otherHand} HAND: Snare & Cymbals`;
+
+      // Update Kit Tags
+      INSTRUMENTS.forEach(inst => {
+        const h = getInstrumentHand(inst.id);
+        const tag = document.getElementById(`tag-${inst.id}`);
+        if (tag) {
+          tag.textContent = h === 'RIGHT' ? 'RH' : 'LH';
+          tag.style.background = h === 'RIGHT' ? '#7c2d12' : '#164e63';
+          tag.style.color = h === 'RIGHT' ? '#fb923c' : '#22d3ee';
+        }
+      });
+
+      // Update Highway Lane Badges
+      const leftBanner = document.getElementById('left-lane-banner');
+      const rightBanner = document.getElementById('right-lane-banner');
+      const leftTag = document.getElementById('left-lane-tag');
+      const rightTag = document.getElementById('right-lane-tag');
+      const leftPad = document.getElementById('left-strike-pad');
+      const rightPad = document.getElementById('right-strike-pad');
+
+      const leftIsFloorBass = (fbHand === 'LEFT');
+
+      leftBanner.className = leftIsFloorBass ? 'lane-banner orange' : 'lane-banner cyan';
+      leftTag.textContent = leftIsFloorBass ? 'FLOOR & BASS' : 'SNARE/CYMBALS';
+      leftPad.className = leftIsFloorBass ? 'pad-btn orange' : 'pad-btn cyan';
+
+      rightBanner.className = !leftIsFloorBass ? 'lane-banner orange' : 'lane-banner cyan';
+      rightTag.textContent = !leftIsFloorBass ? 'FLOOR & BASS' : 'SNARE/CYMBALS';
+      rightPad.className = !leftIsFloorBass ? 'pad-btn orange' : 'pad-btn cyan';
+
+      // Update Kit Layout scale for Lefties
+      const kitContainer = document.getElementById('kit-view-container');
+      if (handedness === 'LEFT_HANDED') {
+        kitContainer.style.transform = 'scaleX(-1)';
+        document.getElementById('handedness-label-kit').textContent = 'LEFTY ORIENTATION';
+      } else {
+        kitContainer.style.transform = 'none';
+        document.getElementById('handedness-label-kit').textContent = 'RIGHTY ORIENTATION';
+      }
+
+      renderMatrix();
+    }
+
+    // Build Subdivisions
+    function buildSubdivisions() {
+      const grid = document.getElementById('subdivision-grid');
+      grid.innerHTML = '';
+      const labels = ['1', 'e', '&', 'a'];
+      for (let i = 0; i < 16; i++) {
+        const cell = document.createElement('div');
+        cell.className = `sub-cell ${i % 4 === 0 ? 'quarter' : ''}`;
+        cell.id = `sub-${i}`;
+        cell.textContent = labels[i % 4];
+        grid.appendChild(cell);
+      }
+    }
+
+    // Build Matrix Grid
+    function renderMatrix() {
+      const container = document.getElementById('matrix-container');
+      container.innerHTML = '';
+
+      INSTRUMENTS.forEach(inst => {
+        const row = document.createElement('div');
+        row.className = 'matrix-row';
+
+        const h = getInstrumentHand(inst.id);
+        const header = document.createElement('div');
+        header.className = 'row-header font-display';
+        header.style.borderColor = h === 'RIGHT' ? 'rgba(255, 109, 0, 0.4)' : 'rgba(0, 229, 255, 0.4)';
+        header.style.background = h === 'RIGHT' ? 'rgba(255, 109, 0, 0.1)' : 'rgba(0, 229, 255, 0.1)';
+        header.style.color = h === 'RIGHT' ? '#fed7aa' : '#cffafe';
+        header.innerHTML = `<span>${inst.short}</span><span style="font-size:0.65rem; color:#fff; background:#000; padding:1px 4px; border-radius:3px;">${h[0]}H</span>`;
+        row.appendChild(header);
+
+        for (let s = 0; s < 16; s++) {
+          const btn = document.createElement('button');
+          const isNote = currentPattern.notes.some(n => n.inst === inst.id && n.step === s);
+          btn.className = `step-btn ${isNote ? 'active ' + (h === 'RIGHT' ? 'orange-active' : 'cyan-active') : ''}`;
+          btn.id = `mat-${inst.id}-${s}`;
+          btn.onclick = () => toggleMatrixCell(inst.id, s);
+          row.appendChild(btn);
+        }
+
+        container.appendChild(row);
+      });
+    }
+
+    function toggleMatrixCell(instId, step) {
+      const idx = currentPattern.notes.findIndex(n => n.inst === instId && n.step === step);
+      if (idx >= 0) {
+        currentPattern.notes.splice(idx, 1);
+      } else {
+        currentPattern.notes.push({ step, inst: instId });
+      }
+      renderMatrix();
+    }
+
+    // Build Categories & Preset list
+    function buildPresetList(selectedCat = 'All') {
+      const catContainer = document.getElementById('category-pills-container');
+      catContainer.innerHTML = '';
+      const cats = ['All', 'Rock & Pop', 'Floor Tom Heavy', 'Funk & Syncopation', 'Jazz & Swing', 'Latin & World', 'Metal & Speed', 'Stick Rudiments'];
+
+      cats.forEach(cat => {
+        const btn = document.createElement('button');
+        btn.className = `pill-btn ${selectedCat === cat ? 'active' : ''}`;
+        btn.textContent = cat;
+        btn.onclick = () => buildPresetList(cat);
+        catContainer.appendChild(btn);
+      });
+
+      const list = document.getElementById('preset-beats-list');
+      list.innerHTML = '';
+      const filtered = selectedCat === 'All' ? PRESETS : PRESETS.filter(p => p.category === selectedCat);
+
+      filtered.forEach(p => {
+        const card = document.createElement('div');
+        card.className = `beat-card-item ${currentPattern.id === p.id ? 'selected' : ''}`;
+        card.innerHTML = `
+          <div style="font-size: 0.85rem; font-weight: 800; color: #fff;" class="font-display">${p.title}</div>
+          <div style="font-size: 0.7rem; color: #94a3b8; margin-top: 2px;">${p.category} • ${p.bpm} BPM</div>
+        `;
+        card.onclick = () => {
+          currentPattern = JSON.parse(JSON.stringify(p));
+          updateBpm(p.bpm);
+          resetPlayback();
+          buildPresetList(selectedCat);
+          renderMatrix();
+        };
+        list.appendChild(card);
+      });
+    }
+
+    // --- 6. RHYTHM HIGHWAY CANVAS ENGINE ---
+    const canvas = document.getElementById('highway-canvas');
+    const ctx = canvas.getContext('2d');
+
+    function renderHighway(elapsedSec, loopDuration) {
+      const width = canvas.width;
+      const height = canvas.height;
+      const laneW = width / 2;
+      const hitLineY = height - 60;
+      const travelTime = 2.0;
+
+      ctx.fillStyle = '#0a0e1a';
+      ctx.fillRect(0, 0, width, height);
+
+      // Lane BG
+      ctx.fillStyle = 'rgba(0, 229, 255, 0.03)';
+      ctx.fillRect(0, 0, laneW, height);
+      ctx.fillStyle = 'rgba(255, 109, 0, 0.03)';
+      ctx.fillRect(laneW, 0, laneW, height);
+
+      // Center Line
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.moveTo(laneW, 0);
+      ctx.lineTo(laneW, height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Hit Target Line
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, hitLineY);
+      ctx.lineTo(width, hitLineY);
+      ctx.stroke();
+
+      // Render Falling Notes
+      const stepDuration = loopDuration / 16;
+      const fbHand = getFloorBassHand();
+
+      [-1, 0, 1].forEach(offset => {
+        currentPattern.notes.forEach(n => {
+          const nHand = getInstrumentHand(n.inst);
+          const isLeftLane = nHand === 'LEFT';
+          const targetTime = (n.step * stepDuration) + (offset * loopDuration);
+          const timeUntil = targetTime - elapsedSec;
+
+          if (timeUntil >= -0.15 && timeUntil <= travelTime) {
+            const prog = 1 - (timeUntil / travelTime);
+            const ny = prog * hitLineY;
+            const nx = isLeftLane ? 16 : laneW + 16;
+            const nw = laneW - 32;
+            const nh = 28;
+
+            const isFloorBass = (n.inst === 'bass' || n.inst === 'floor_tom');
+            ctx.fillStyle = isFloorBass ? 'rgba(255, 109, 0, 0.9)' : 'rgba(0, 229, 255, 0.9)';
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1.5;
+
+            ctx.beginPath();
+            ctx.roundRect(nx, ny - nh / 2, nw, nh, 6);
+            ctx.fill();
+            ctx.stroke();
+
+            // Note Text
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 11px "Chakra Petch", sans-serif';
+            ctx.textAlign = 'left';
+            const instObj = INSTRUMENTS.find(i => i.id === n.inst);
+            ctx.fillText(instObj ? instObj.short : n.inst, nx + 10, ny + 4);
+          }
+        });
+      });
+
+      // Hit feedback splashes
+      const now = Date.now();
+      recentHits.forEach(h => {
+        const age = (now - h.timestamp) / 1000;
+        if (age < 0.6) {
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, 1 - age / 0.6);
+          const hx = h.hand === 'LEFT' ? laneW / 2 : laneW + laneW / 2;
+          const hy = hitLineY - 30 - age * 25;
+          ctx.fillStyle = h.rating === 'PERFECT' ? '#10b981' : h.rating === 'EARLY' ? '#fbbf24' : '#f97316';
+          ctx.font = 'bold 16px "Chakra Petch", sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(h.rating, hx, hy);
+          ctx.restore();
+        }
+      });
+    }
+
+    // --- 7. PLAYBACK LOOP ---
+    let lastStep = -1;
+
+    function tick() {
+      if (!isPlaying) return;
+
+      const secPerBeat = 60 / bpm;
+      const loopDuration = secPerBeat * 4; // 1 bar (4 beats)
+      const stepDuration = loopDuration / 16;
+
+      const now = performance.now() / 1000;
+      const elapsed = (now - startTime) % loopDuration;
+      const exactStep = Math.floor(elapsed / stepDuration);
+
+      // New step trigger
+      if (exactStep !== lastStep) {
+        lastStep = exactStep;
+        currentStep = exactStep;
+
+        // Bar increment check
+        if (exactStep === 0 && now - startTime > 0.1) {
+          currentBar++;
+          document.getElementById('bar-counter-label').textContent = `BAR: #${currentBar}`;
+          if (speedTrainer) {
+            barsUntilIncrement--;
+            if (barsUntilIncrement <= 0) {
+              updateBpm(Math.min(220, bpm + 5));
+              barsUntilIncrement = 4;
+            }
+          }
+        }
+
+        // Metronome Beat visualizer
+        const currentBeat = Math.floor(exactStep / 4);
+        for (let b = 0; b < 4; b++) {
+          const el = document.getElementById(`beat-${b}`);
+          if (b === currentBeat) el.classList.add('active');
+          else el.classList.remove('active');
+        }
+
+        // Subdivisions visualizer
+        for (let s = 0; s < 16; s++) {
+          const el = document.getElementById(`sub-${s}`);
+          if (s === exactStep) el.classList.add('active');
+          else el.classList.remove('active');
+        }
+
+        // Downbeat flash for deaf users
+        if (exactStep === 0) {
+          const flash = document.getElementById('flash-overlay');
+          flash.classList.add('active');
+          setTimeout(() => flash.classList.remove('active'), 80);
+        }
+
+        // Play pattern notes
+        const notesThisStep = currentPattern.notes.filter(n => n.step === exactStep);
+        notesThisStep.forEach(n => {
+          if (!isPracticeMode) {
+            audio.play(n.inst);
+          }
+          // Flash drumhead
+          const head = document.getElementById(`head-${n.inst}`);
+          if (head) {
+            head.classList.add('hit');
+            const h = getInstrumentHand(n.inst);
+            if (h === 'RIGHT') head.classList.add('orange-glow');
+            setTimeout(() => {
+              head.classList.remove('hit');
+              head.classList.remove('orange-glow');
+            }, 160);
+          }
+        });
+      }
+
+      renderHighway(elapsed, loopDuration);
+      animFrame = requestAnimationFrame(tick);
+    }
+
+    // --- 8. CONTROLS LOGIC ---
+    function togglePlay() {
+      audio.init();
+      isPlaying = !isPlaying;
+      const btn = document.getElementById('play-btn');
+      const text = document.getElementById('play-text');
+      const icon = document.getElementById('play-icon');
+
+      if (isPlaying) {
+        btn.classList.add('playing');
+        text.textContent = 'PAUSE TRAINER';
+        icon.textContent = '⏸';
+        startTime = performance.now() / 1000 - (currentStep * (60 / bpm / 4));
+        lastStep = -1;
+        animFrame = requestAnimationFrame(tick);
+      } else {
+        btn.classList.remove('playing');
+        text.textContent = 'START TRAINER';
+        icon.textContent = '▶';
+        cancelAnimationFrame(animFrame);
+      }
+    }
+
+    function resetPlayback() {
+      isPlaying = false;
+      currentStep = 0;
+      currentBar = 1;
+      lastStep = -1;
+      cancelAnimationFrame(animFrame);
+
+      const btn = document.getElementById('play-btn');
+      btn.classList.remove('playing');
+      document.getElementById('play-text').textContent = 'START TRAINER';
+      document.getElementById('play-icon').textContent = '▶';
+      document.getElementById('bar-counter-label').textContent = 'BAR: #1';
+
+      for (let b = 0; b < 4; b++) document.getElementById(`beat-${b}`).classList.remove('active');
+      for (let s = 0; s < 16; s++) document.getElementById(`sub-${s}`).classList.remove('active');
+
+      renderHighway(0, (60 / bpm) * 4);
+    }
+
+    function updateBpm(val) {
+      bpm = parseInt(val);
+      document.getElementById('bpm-label').textContent = `${bpm} BPM`;
+      document.getElementById('bpm-slider').value = bpm;
+    }
+
+    function adjustBpm(delta) {
+      updateBpm(Math.max(30, Math.min(240, bpm + delta)));
+    }
+
+    // Tap Tempo
+    let tapTimes = [];
+    function tapTempo() {
+      const now = performance.now();
+      tapTimes.push(now);
+      if (tapTimes.length > 4) tapTimes.shift();
+      if (tapTimes.length >= 2) {
+        let diffs = [];
+        for (let i = 1; i < tapTimes.length; i++) diffs.push(tapTimes[i] - tapTimes[i - 1]);
+        const avg = diffs.reduce((a, b) => a + b) / diffs.length;
+        const calcBpm = Math.round(60000 / avg);
+        if (calcBpm >= 30 && calcBpm <= 240) updateBpm(calcBpm);
+      }
+    }
+
+    function toggleHandedness() {
+      handedness = handedness === 'RIGHT_HANDED' ? 'LEFT_HANDED' : 'RIGHT_HANDED';
+      document.getElementById('handedness-btn').textContent = handedness === 'RIGHT_HANDED' ? '🤚 RIGHT-HANDED' : '🤚 LEFT-HANDED';
+      updateHandBadges();
+    }
+
+    function toggleInvertHands() {
+      invertHands = !invertHands;
+      updateHandBadges();
+    }
+
+    function setPracticeMode(active) {
+      isPracticeMode = active;
+      document.getElementById('mode-watch').className = `mode-btn font-display ${!active ? 'active' : ''}`;
+      document.getElementById('mode-practice').className = `mode-btn font-display ${active ? 'active' : ''}`;
+      document.getElementById('stats-container').style.display = active ? 'grid' : 'none';
+    }
+
+    function toggleSpeedTrainer(enabled) {
+      speedTrainer = enabled;
+      barsUntilIncrement = 4;
+      document.getElementById('speed-trainer-badge').style.display = enabled ? 'inline-block' : 'none';
+    }
+
+    function toggleMute() {
+      audio.isMuted = !audio.isMuted;
+      document.getElementById('audio-toggle-btn').textContent = audio.isMuted ? '🔇 Audio Muted' : '🔊 Audio ON';
+    }
+
+    function randomizePattern() {
+      currentPattern.notes = [];
+      for (let s = 0; s < 16; s++) {
+        if (s % 4 === 0 || (s % 2 === 1 && Math.random() > 0.6)) {
+          currentPattern.notes.push({ step: s, inst: Math.random() > 0.4 ? 'bass' : 'floor_tom' });
+        }
+        if (s % 2 === 0) currentPattern.notes.push({ step: s, inst: 'hihat_closed' });
+        if (s === 4 || s === 12) currentPattern.notes.push({ step: s, inst: 'snare' });
+      }
+      renderMatrix();
+    }
+
+    function clearGrid() {
+      currentPattern.notes = [];
+      renderMatrix();
+    }
+
+    // --- 9. INTERACTIVE STRIKE & SCORING ---
+    function handleUserStrike(hand) {
+      audio.init();
+      const fbHand = getFloorBassHand();
+      if (hand === fbHand) {
+        audio.play('bass');
+      } else {
+        audio.play('snare');
+      }
+
+      if (!isPlaying) return;
+
+      const secPerBeat = 60 / bpm;
+      const loopDuration = secPerBeat * 4;
+      const now = performance.now() / 1000;
+      const elapsed = (now - startTime) % loopDuration;
+
+      // Find closest note matching hand
+      let closestDiff = Infinity;
+      currentPattern.notes.forEach(n => {
+        const nHand = getInstrumentHand(n.inst);
+        if (nHand === hand) {
+          const target = (n.step / 16) * loopDuration;
+          const diff = Math.abs(elapsed - target);
+          if (diff < closestDiff) closestDiff = diff;
+        }
+      });
+
+      let rating = 'MISS';
+      if (closestDiff <= 0.055) rating = 'PERFECT';
+      else if (closestDiff <= 0.12) rating = 'EARLY';
+      else if (closestDiff <= 0.18) rating = 'LATE';
+
+      recentHits.push({ hand, rating, timestamp: Date.now() });
+      if (recentHits.length > 5) recentHits.shift();
+
+      // Update stats
+      stats.total++;
+      if (rating === 'PERFECT') {
+        stats.perf++;
+        stats.streak++;
+      } else if (rating === 'EARLY') {
+        stats.early++;
+        stats.streak = 0;
+      } else if (rating === 'LATE') {
+        stats.late++;
+        stats.streak = 0;
+      } else {
+        stats.streak = 0;
+      }
+      stats.maxStreak = Math.max(stats.maxStreak, stats.streak);
+
+      const acc = Math.round(((stats.perf * 1.0 + (stats.early + stats.late) * 0.6) / stats.total) * 100);
+      document.getElementById('stat-acc').textContent = `${acc}%`;
+      document.getElementById('stat-perf').textContent = stats.perf;
+      document.getElementById('stat-timing').textContent = stats.early + stats.late;
+      document.getElementById('stat-streak').textContent = `${stats.maxStreak} 🔥`;
+    }
+
+    function resetStats() {
+      stats = { total: 0, perf: 0, early: 0, late: 0, streak: 0, maxStreak: 0 };
+      document.getElementById('stat-acc').textContent = '100%';
+      document.getElementById('stat-perf').textContent = '0';
+      document.getElementById('stat-timing').textContent = '0';
+      document.getElementById('stat-streak').textContent = '0 🔥';
+    }
+
+    function triggerManualDrum(instId) {
+      audio.play(instId);
+      const head = document.getElementById(`head-${instId}`);
+      if (head) {
+        head.classList.add('hit');
+        const h = getInstrumentHand(instId);
+        if (h === 'RIGHT') head.classList.add('orange-glow');
+        setTimeout(() => {
+          head.classList.remove('hit');
+          head.classList.remove('orange-glow');
+        }, 160);
+      }
+    }
+
+    // Keyboard bindings
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      const k = e.key.toLowerCase();
+      if (k === 'd' || k === 'f' || k === 'arrowleft') {
+        handleUserStrike('LEFT');
+      } else if (k === 'j' || k === 'k' || k === 'arrowright') {
+        handleUserStrike('RIGHT');
+      } else if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      }
+    });
+
+    // Initialize
+    window.addEventListener('DOMContentLoaded', () => {
+      buildSubdivisions();
+      buildPresetList();
+      updateHandBadges();
+      renderHighway(0, (60 / bpm) * 4);
+    });
+  </script>
+</body>
+</html>
