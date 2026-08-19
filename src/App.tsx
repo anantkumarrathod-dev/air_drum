@@ -187,8 +187,10 @@ export const App: React.FC = () => {
 
       if (isFloorBassStrike) {
         audioEngine.playInstrument('bass', 1.0);
+        setActiveHits((prev) => [...prev.slice(-10), { instrument: 'bass', hand, timestamp: Date.now() }]);
       } else {
         audioEngine.playInstrument('snare', 1.0);
+        setActiveHits((prev) => [...prev.slice(-10), { instrument: 'snare', hand, timestamp: Date.now() }]);
       }
 
       if (!isPlaying) return;

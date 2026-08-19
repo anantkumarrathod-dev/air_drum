@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Hand, Handedness } from '../types/drum';
-import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, Zap, AlertCircle } from 'lucide-react';
+import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, Zap, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (hand: Hand) => void;
@@ -14,12 +14,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   invertHands = false,
 }) => {
   const [isActive, setIsActive] = useState<boolean>(false);
+  const [isInitializing, setIsInitializing] = useState<boolean>(false);
   const [trackingMode, setTrackingMode] = useState<'fingers' | 'sticks'>('fingers');
-  const [sensitivity, setSensitivity] = useState<number>(40);
+  const [sensitivity, setSensitivity] = useState<number>(65); // Default to high-responsiveness (65%)
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [fps, setFps] = useState<number>(0);
   const [leftMotionLevel, setLeftMotionLevel] = useState<number>(0);
   const [rightMotionLevel, setRightMotionLevel] = useState<number>(0);
+  const [leftHitCount, setLeftHitCount] = useState<number>(0);
+  const [rightHitCount, setRightHitCount] = useState<number>(0);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -36,7 +39,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     barColorClass: isFloorBassRight ? 'bg-cyan-400' : 'bg-orange-500',
     textAccentClass: isFloorBassRight ? 'text-cyan-300' : 'text-orange-300',
     drumParts: isFloorBassRight ? 'SNARE • HI-HAT • CYMBALS • TOMS' : 'FLOOR TOM • BASS DRUM (KICK)',
-    shortDrums: isFloorBassRight ? ['SNARE', 'HI-HAT', 'CYMBALS', 'TOMS'] : ['FLOOR TOM', 'BASS DRUM'],
   };
 
   const rightZoneConfig = {
@@ -46,7 +48,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     barColorClass: isFloorBassRight ? 'bg-orange-500' : 'bg-cyan-400',
     textAccentClass: isFloorBassRight ? 'text-orange-300' : 'text-cyan-300',
     drumParts: isFloorBassRight ? 'FLOOR TOM • BASS DRUM (KICK)' : 'SNARE • HI-HAT • CYMBALS • TOMS',
-    shortDrums: isFloorBassRight ? ['FLOOR TOM', 'BASS DRUM'] : ['SNARE', 'HI-HAT', 'CYMBALS', 'TOMS'],
   };
 
   // Optical flow / motion history
@@ -56,8 +57,14 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
   const triggerStrike = useCallback((hand: Hand) => {
     const now = performance.now();
-    if (now - lastStrikeTimeRef.current[hand] < 180) return; // 180ms debounce
+    if (now - lastStrikeTimeRef.current[hand] < 160) return; // 160ms debounce for natural drumming rate
     lastStrikeTimeRef.current[hand] = now;
+
+    if (hand === 'LEFT') {
+      setLeftHitCount((c) => c + 1);
+    } else {
+      setRightHitCount((c) => c + 1);
+    }
 
     setActiveZoneFlash((prev) => ({ ...prev, [hand]: true }));
     setTimeout(() => {
@@ -70,32 +77,77 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const startCamera = async () => {
     try {
       setCameraError(null);
+      setIsInitializing(true);
+
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera access is not supported on this device/browser.');
+        throw new Error('Camera API (getUserMedia) is not supported by your browser or requires HTTPS.');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
+      // Try multiple constraint fallbacks for universal device compatibility
+      let stream: MediaStream | null = null;
+      const constraintOptions: MediaStreamConstraints[] = [
+        {
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user',
+          },
+          audio: false,
         },
-        audio: false,
-      });
+        {
+          video: { facingMode: 'user' },
+          audio: false,
+        },
+        {
+          video: true,
+          audio: false,
+        },
+      ];
+
+      for (const constraints of constraintOptions) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          if (stream) break;
+        } catch {
+          // Try next fallback
+        }
+      }
+
+      if (!stream) {
+        throw new Error('Unable to access camera. Please verify camera permissions in your browser address bar.');
+      }
 
       streamRef.current = stream;
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.muted = true;
-        videoRef.current.playsInline = true;
-        await videoRef.current.play();
+      const video = videoRef.current;
+      if (video) {
+        video.srcObject = stream;
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('webkit-playsinline', 'true');
+        video.muted = true;
+
+        await new Promise<void>((resolve) => {
+          video.onloadedmetadata = async () => {
+            try {
+              await video.play();
+            } catch (playErr) {
+              console.warn('video.play() auto-resume:', playErr);
+            }
+            resolve();
+          };
+          // Timeout fallback in case onloadedmetadata doesn't fire immediately
+          setTimeout(() => resolve(), 800);
+        });
       }
+
       setIsActive(true);
+      setIsInitializing(false);
     } catch (err: unknown) {
       console.error('Camera access error:', err);
       const msg = err instanceof Error ? err.message : 'Camera access denied or unavailable.';
       setCameraError(msg);
       setIsActive(false);
+      setIsInitializing(false);
     }
   };
 
@@ -108,6 +160,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       videoRef.current.srcObject = null;
     }
     setIsActive(false);
+    setIsInitializing(false);
     prevFrameDataRef.current = null;
     setFps(0);
     setLeftMotionLevel(0);
@@ -133,7 +186,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       const overlayCanvas = overlayCanvasRef.current;
       const procCanvas = procCanvasRef.current;
 
-      if (!video || !overlayCanvas || !procCanvas || video.readyState < 2) {
+      if (!video || !overlayCanvas || !procCanvas || video.readyState < 2 || video.videoWidth === 0) {
         animId = requestAnimationFrame(processMotion);
         return;
       }
@@ -156,7 +209,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         if (prevFrameDataRef.current && prevFrameDataRef.current.length === data.length) {
           const prev = prevFrameDataRef.current;
           const midX = 80;
-          const targetMinY = Math.floor(120 * 0.25);
+          const targetMinY = Math.floor(120 * 0.20);
           const targetMaxY = Math.floor(120 * 0.95);
 
           let leftMotionSum = 0;
@@ -169,7 +222,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                            Math.abs(data[i + 1] - prev[i + 1]) +
                            Math.abs(data[i + 2] - prev[i + 2]);
 
-              if (diff > 50) {
+              // Noise threshold of 28 for high responsiveness
+              if (diff > 28) {
                 // Since the video is mirrored (scale-x-[-1]), user's left hand is on left side of camera
                 if (x < midX) {
                   leftMotionSum += diff;
@@ -180,20 +234,21 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             }
           }
 
-          // Sensitivity threshold
-          const thresholdMultiplier = trackingMode === 'fingers' ? 0.75 : 1.0;
-          const threshold = (100 - sensitivity) * 120 * thresholdMultiplier;
+          // Responsive sensitivity curve:
+          // Sensitivity 15-95 (default 65)
+          const thresholdMultiplier = trackingMode === 'fingers' ? 0.65 : 0.9;
+          const rawThreshold = (450 + (100 - sensitivity) * 22) * thresholdMultiplier;
 
-          const leftNorm = Math.min(100, Math.round((leftMotionSum / (threshold * 1.5)) * 100));
-          const rightNorm = Math.min(100, Math.round((rightMotionSum / (threshold * 1.5)) * 100));
+          const leftPercent = Math.min(100, Math.round((leftMotionSum / rawThreshold) * 100));
+          const rightPercent = Math.min(100, Math.round((rightMotionSum / rawThreshold) * 100));
 
-          setLeftMotionLevel(leftNorm);
-          setRightMotionLevel(rightNorm);
+          setLeftMotionLevel(leftPercent);
+          setRightMotionLevel(rightPercent);
 
-          if (leftMotionSum > threshold) {
+          if (leftMotionSum >= rawThreshold) {
             triggerStrike('LEFT');
           }
-          if (rightMotionSum > threshold) {
+          if (rightMotionSum >= rawThreshold) {
             triggerStrike('RIGHT');
           }
         }
@@ -209,8 +264,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         oCtx.clearRect(0, 0, w, h);
 
         const padW = w * 0.44;
-        const padH = h * 0.65;
-        const padY = h * 0.28;
+        const padH = h * 0.68;
+        const padY = h * 0.24;
 
         // Left Strike Zone (Color Coded)
         const leftX = w * 0.04;
@@ -298,12 +353,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               AIR DRUMMING
               {isActive && (
                 <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
-                  ● {fps} FPS
+                  ● {fps} FPS • READY
                 </span>
               )}
             </h3>
             <p className="text-[10px] font-mono-code text-slate-400">
-              Motion-tracked visual strike zones for drumsticks & index fingers
+              High-responsiveness visual motion tracking for drumsticks & index fingers
             </p>
           </div>
         </div>
@@ -320,21 +375,25 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           ) : (
             <button
               onClick={startCamera}
-              className="flex items-center gap-1 px-3 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all"
+              disabled={isInitializing}
+              className="flex items-center gap-1 px-3 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all disabled:opacity-50"
             >
               <Video className="w-3.5 h-3.5" />
-              <span>START AIR DRUMMING</span>
+              <span>{isInitializing ? 'STARTING CAMERA...' : 'START AIR DRUMMING'}</span>
             </button>
           )}
         </div>
       </div>
 
       {cameraError && (
-        <div className="p-2 rounded-lg bg-red-950/70 border border-red-500/50 text-red-200 text-[11px] font-mono-code flex items-start gap-2">
-          <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-          <div className="flex flex-col">
-            <strong>Camera Permission Required:</strong>
-            <span>Please allow camera access when prompted by your browser to use Air Drumming.</span>
+        <div className="p-2.5 rounded-lg bg-red-950/70 border border-red-500/50 text-red-200 text-[11px] font-mono-code flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+          <div className="flex flex-col gap-0.5">
+            <strong className="text-red-300 font-bold">Camera Access Notice:</strong>
+            <span>{cameraError}</span>
+            <span className="text-[10px] text-slate-400 mt-1">
+              💡 Tip: You can also tap the Left and Right strike zones directly on your touchscreen or click the test buttons below!
+            </span>
           </div>
         </div>
       )}
@@ -342,7 +401,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       {/* Viewport */}
       {isActive ? (
         <div className="flex flex-col gap-2">
-          {/* Live Video with Canvas Overlay */}
+          {/* Live Video with Canvas Overlay & Direct Tap Support */}
           <div className="relative w-full aspect-[16/9] max-h-[240px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
             <video
               ref={videoRef}
@@ -358,52 +417,92 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               height={360}
               className="absolute inset-0 w-full h-full object-cover pointer-events-none"
             />
+
+            {/* Direct Touch / Click Strike Zones on Top of Video */}
+            <div className="absolute inset-0 grid grid-cols-2 pointer-events-auto">
+              <div
+                onClick={() => triggerStrike('LEFT')}
+                className="cursor-pointer active:bg-cyan-500/20 transition-colors"
+                title="Tap to trigger Left Air Strike"
+              />
+              <div
+                onClick={() => triggerStrike('RIGHT')}
+                className="cursor-pointer active:bg-orange-500/20 transition-colors"
+                title="Tap to trigger Right Air Strike"
+              />
+            </div>
           </div>
 
-          {/* Color-Coded Drum Part Zone Cards with Motion Gauges */}
+          {/* Color-Coded Drum Part Zone Cards with Motion Gauges & Hit Counters */}
           <div className="grid grid-cols-2 gap-2 text-[11px] font-mono-code">
             {/* Left Zone Card */}
-            <div className={`flex flex-col gap-1 p-2 rounded-lg border ${leftZoneConfig.bgClass}`}>
+            <div
+              onClick={() => triggerStrike('LEFT')}
+              className={`flex flex-col gap-1 p-2 rounded-lg border cursor-pointer select-none transition-all active:scale-[0.98] ${
+                activeZoneFlash.LEFT
+                  ? 'bg-cyan-500/40 border-white shadow-[0_0_15px_#00E5FF]'
+                  : leftZoneConfig.bgClass
+              }`}
+            >
               <div className="flex items-center justify-between">
                 <span className="font-bold flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: leftZoneConfig.color }} />
                   LEFT ZONE
                 </span>
-                <span className="font-black">{leftMotionLevel}%</span>
+                <span className="font-black text-xs">{leftMotionLevel}%</span>
               </div>
               <div className="font-display font-bold text-xs text-white truncate">
                 {leftZoneConfig.drumParts}
               </div>
-              <div className="w-full h-1.5 rounded-full bg-slate-900 overflow-hidden mt-0.5">
+              <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden mt-0.5 relative">
                 <div
                   className={`h-full ${leftZoneConfig.barColorClass} transition-all duration-75`}
-                  style={{ width: `${leftMotionLevel}%` }}
+                  style={{ width: `${Math.min(100, leftMotionLevel)}%` }}
                 />
+                {/* 100% Trigger Line */}
+                <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/60" />
+              </div>
+              <div className="flex justify-between items-center text-[10px] text-slate-400 mt-0.5">
+                <span>Hits: <strong className="text-white">{leftHitCount}</strong></span>
+                <span className="text-[9px] opacity-75">Click / Air Strike</span>
               </div>
             </div>
 
             {/* Right Zone Card */}
-            <div className={`flex flex-col gap-1 p-2 rounded-lg border ${rightZoneConfig.bgClass}`}>
+            <div
+              onClick={() => triggerStrike('RIGHT')}
+              className={`flex flex-col gap-1 p-2 rounded-lg border cursor-pointer select-none transition-all active:scale-[0.98] ${
+                activeZoneFlash.RIGHT
+                  ? 'bg-orange-500/40 border-white shadow-[0_0_15px_#FF6D00]'
+                  : rightZoneConfig.bgClass
+              }`}
+            >
               <div className="flex items-center justify-between">
                 <span className="font-bold flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: rightZoneConfig.color }} />
                   RIGHT ZONE
                 </span>
-                <span className="font-black">{rightMotionLevel}%</span>
+                <span className="font-black text-xs">{rightMotionLevel}%</span>
               </div>
               <div className="font-display font-bold text-xs text-white truncate">
                 {rightZoneConfig.drumParts}
               </div>
-              <div className="w-full h-1.5 rounded-full bg-slate-900 overflow-hidden mt-0.5">
+              <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden mt-0.5 relative">
                 <div
                   className={`h-full ${rightZoneConfig.barColorClass} transition-all duration-75`}
-                  style={{ width: `${rightMotionLevel}%` }}
+                  style={{ width: `${Math.min(100, rightMotionLevel)}%` }}
                 />
+                {/* 100% Trigger Line */}
+                <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/60" />
+              </div>
+              <div className="flex justify-between items-center text-[10px] text-slate-400 mt-0.5">
+                <span>Hits: <strong className="text-white">{rightHitCount}</strong></span>
+                <span className="text-[9px] opacity-75">Click / Air Strike</span>
               </div>
             </div>
           </div>
 
-          {/* Controls */}
+          {/* Controls: Mode & Sensitivity Presets */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-950/80 p-2 rounded-lg border border-slate-800 text-xs">
             {/* Tracking Mode Switcher */}
             <div className="flex flex-col gap-1">
@@ -413,7 +512,10 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               </span>
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setTrackingMode('fingers')}
+                  onClick={() => {
+                    setTrackingMode('fingers');
+                    setSensitivity(70);
+                  }}
                   className={`flex-1 py-1 rounded font-display font-bold text-[11px] transition-all ${
                     trackingMode === 'fingers'
                       ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-black shadow-[0_0_8px_#00E5FF]'
@@ -423,7 +525,10 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                   👉 INDEX FINGERS
                 </button>
                 <button
-                  onClick={() => setTrackingMode('sticks')}
+                  onClick={() => {
+                    setTrackingMode('sticks');
+                    setSensitivity(60);
+                  }}
                   className={`flex-1 py-1 rounded font-display font-bold text-[11px] transition-all ${
                     trackingMode === 'sticks'
                       ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-black shadow-[0_0_8px_#FF6D00]'
@@ -435,23 +540,28 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               </div>
             </div>
 
-            {/* Motion Sensitivity Slider */}
+            {/* Motion Sensitivity Presets & Slider */}
             <div className="flex flex-col gap-1">
               <div className="flex justify-between font-mono-code text-slate-300 text-[11px]">
                 <span className="flex items-center gap-1">
                   <Sliders className="w-3 h-3 text-amber-400" />
-                  SENSITIVITY:
+                  MOTION SENSITIVITY:
                 </span>
                 <span className="text-cyan-400 font-bold">{sensitivity}%</span>
               </div>
               <input
                 type="range"
-                min="15"
-                max="75"
+                min="20"
+                max="95"
                 value={sensitivity}
                 onChange={(e) => setSensitivity(Number(e.target.value))}
                 className="w-full accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
               />
+              <div className="flex justify-between text-[9px] font-mono-code text-slate-400">
+                <button onClick={() => setSensitivity(45)} className="hover:text-white">Normal (45%)</button>
+                <button onClick={() => setSensitivity(65)} className="hover:text-white font-bold text-amber-300">Responsive (65%)</button>
+                <button onClick={() => setSensitivity(85)} className="hover:text-white">Ultra (85%)</button>
+              </div>
             </div>
           </div>
 
@@ -466,7 +576,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               }`}
             >
               <Zap className="w-3 h-3" />
-              <span>Test Left Air Strike</span>
+              <span>Test Left Air Strike [D/F]</span>
             </button>
             <button
               onClick={() => triggerStrike('RIGHT')}
@@ -477,18 +587,18 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               }`}
             >
               <Zap className="w-3 h-3" />
-              <span>Test Right Air Strike</span>
+              <span>Test Right Air Strike [J/K]</span>
             </button>
           </div>
         </div>
       ) : (
         <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-950/60 border border-slate-800 text-xs font-mono-code text-slate-300">
-          <div className="flex items-center gap-1.5 text-amber-300 font-bold">
-            <Video className="w-3.5 h-3.5 text-amber-400" />
-            <span>Air Drumming Sensor Ready</span>
+          <div className="flex items-center gap-1.5 text-emerald-300 font-bold">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Air Drumming Motion Sensor Ready</span>
           </div>
           <p className="text-[11px] text-slate-400">
-            Click <strong className="text-emerald-400">"START AIR DRUMMING"</strong> to activate camera tracking. You will see two color-coded zones:
+            Click <strong className="text-emerald-400">"START AIR DRUMMING"</strong> to activate camera tracking. Position your hands or sticks in front of the camera:
           </p>
           <div className="grid grid-cols-2 gap-2 mt-1">
             <div className={`p-2 rounded border ${leftZoneConfig.bgClass}`}>
