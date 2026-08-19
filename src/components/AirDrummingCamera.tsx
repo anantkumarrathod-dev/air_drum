@@ -1,12 +1,40 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Hand, Handedness } from '../types/drum';
-import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, Zap, AlertCircle, Sparkles, RefreshCw } from 'lucide-react';
+import { Hand, Handedness, DrumInstrumentId } from '../types/drum';
+import { getInstrumentHand } from '../data/beatLibrary';
+import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, Sparkles, RefreshCw } from 'lucide-react';
 
 interface AirDrummingCameraProps {
-  onAirStrike: (hand: Hand) => void;
+  onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
   handedness?: Handedness;
   invertHands?: boolean;
 }
+
+interface AirZoneDef {
+  id: DrumInstrumentId;
+  name: string;
+  shortName: string;
+  xRatio: number;
+  yRatio: number;
+  wRatio: number;
+  hRatio: number;
+}
+
+// 8 Discrete Drum Zones in 3D Air Space
+const AIR_ZONES: AirZoneDef[] = [
+  // Top Row: Cymbals & Rack Toms
+  { id: 'crash', name: 'CRASH CYMBAL', shortName: 'CRASH', xRatio: 0.03, yRatio: 0.03, wRatio: 0.21, hRatio: 0.27 },
+  { id: 'high_tom', name: 'HIGH TOM', shortName: 'HI-TOM', xRatio: 0.27, yRatio: 0.03, wRatio: 0.21, hRatio: 0.27 },
+  { id: 'mid_tom', name: 'MID TOM', shortName: 'MID-TOM', xRatio: 0.52, yRatio: 0.03, wRatio: 0.21, hRatio: 0.27 },
+  { id: 'ride', name: 'RIDE CYMBAL', shortName: 'RIDE', xRatio: 0.76, yRatio: 0.03, wRatio: 0.21, hRatio: 0.27 },
+
+  // Middle Row: Hi-Hat, Snare, Floor Tom
+  { id: 'hihat_closed', name: 'HI-HAT', shortName: 'HI-HAT', xRatio: 0.03, yRatio: 0.35, wRatio: 0.21, hRatio: 0.28 },
+  { id: 'snare', name: 'SNARE DRUM', shortName: 'SNARE', xRatio: 0.27, yRatio: 0.35, wRatio: 0.21, hRatio: 0.28 },
+  { id: 'floor_tom', name: 'FLOOR TOM', shortName: 'FLOOR TOM', xRatio: 0.76, yRatio: 0.35, wRatio: 0.21, hRatio: 0.28 },
+
+  // Bottom Center: Bass Drum (Kick)
+  { id: 'bass', name: 'BASS DRUM (KICK)', shortName: 'BASS DRUM', xRatio: 0.35, yRatio: 0.67, wRatio: 0.30, hRatio: 0.30 },
+];
 
 export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   onAirStrike,
@@ -19,61 +47,38 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [sensitivity, setSensitivity] = useState<number>(65); // High responsiveness
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [fps, setFps] = useState<number>(0);
-  const [leftMotionLevel, setLeftMotionLevel] = useState<number>(0);
-  const [rightMotionLevel, setRightMotionLevel] = useState<number>(0);
-  const [leftHitCount, setLeftHitCount] = useState<number>(0);
-  const [rightHitCount, setRightHitCount] = useState<number>(0);
   const [cameraResolution, setCameraResolution] = useState<string>('');
+
+  // Per-zone motion levels & flash states for all 8 drum parts
+  const [zoneMotionLevels, setZoneMotionLevels] = useState<Record<string, number>>({});
+  const [zoneFlashes, setZoneFlashes] = useState<Record<string, boolean>>({});
+  const [zoneHitCounts, setZoneHitCounts] = useState<Record<string, number>>({});
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const mainCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const procCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Determine drum assignments for Left & Right zones
-  const isFloorBassRight = handedness === 'RIGHT_HANDED' ? !invertHands : invertHands;
-
-  const leftZoneConfig = {
-    color: isFloorBassRight ? '#00E5FF' : '#FF6D00',
-    colorName: isFloorBassRight ? 'CYAN' : 'ORANGE',
-    bgClass: isFloorBassRight ? 'bg-cyan-950/40 border-cyan-500/50 text-cyan-200' : 'bg-orange-950/40 border-orange-500/50 text-orange-200',
-    barColorClass: isFloorBassRight ? 'bg-cyan-400' : 'bg-orange-500',
-    textAccentClass: isFloorBassRight ? 'text-cyan-300' : 'text-orange-300',
-    drumParts: isFloorBassRight ? 'SNARE • HI-HAT • CYMBALS • TOMS' : 'FLOOR TOM • BASS DRUM (KICK)',
-  };
-
-  const rightZoneConfig = {
-    color: isFloorBassRight ? '#FF6D00' : '#00E5FF',
-    colorName: isFloorBassRight ? 'ORANGE' : 'CYAN',
-    bgClass: isFloorBassRight ? 'bg-orange-950/40 border-orange-500/50 text-orange-200' : 'bg-cyan-950/40 border-cyan-500/50 text-cyan-200',
-    barColorClass: isFloorBassRight ? 'bg-orange-500' : 'bg-cyan-400',
-    textAccentClass: isFloorBassRight ? 'text-orange-300' : 'text-cyan-300',
-    drumParts: isFloorBassRight ? 'FLOOR TOM • BASS DRUM (KICK)' : 'SNARE • HI-HAT • CYMBALS • TOMS',
-  };
-
   // Optical flow / motion history
   const prevFrameDataRef = useRef<Uint8ClampedArray | null>(null);
-  const lastStrikeTimeRef = useRef<{ LEFT: number; RIGHT: number }>({ LEFT: 0, RIGHT: 0 });
-  const [activeZoneFlash, setActiveZoneFlash] = useState<{ LEFT: boolean; RIGHT: boolean }>({ LEFT: false, RIGHT: false });
+  const lastZoneStrikeTimeRef = useRef<Record<string, number>>({});
 
-  const triggerStrike = useCallback((hand: Hand) => {
+  const triggerStrike = useCallback((instId: DrumInstrumentId) => {
     const now = performance.now();
-    if (now - lastStrikeTimeRef.current[hand] < 160) return; // 160ms debounce for natural drumming rate
-    lastStrikeTimeRef.current[hand] = now;
+    const lastTime = lastZoneStrikeTimeRef.current[instId] || 0;
+    if (now - lastTime < 160) return; // 160ms debounce
+    lastZoneStrikeTimeRef.current[instId] = now;
 
-    if (hand === 'LEFT') {
-      setLeftHitCount((c) => c + 1);
-    } else {
-      setRightHitCount((c) => c + 1);
-    }
+    const assignedHand = getInstrumentHand(instId, handedness, invertHands);
 
-    setActiveZoneFlash((prev) => ({ ...prev, [hand]: true }));
+    setZoneHitCounts((prev) => ({ ...prev, [instId]: (prev[instId] || 0) + 1 }));
+    setZoneFlashes((prev) => ({ ...prev, [instId]: true }));
     setTimeout(() => {
-      setActiveZoneFlash((prev) => ({ ...prev, [hand]: false }));
+      setZoneFlashes((prev) => ({ ...prev, [instId]: false }));
     }, 180);
 
-    onAirStrike(hand);
-  }, [onAirStrike]);
+    onAirStrike(instId, assignedHand);
+  }, [onAirStrike, handedness, invertHands]);
 
   const startCamera = async () => {
     try {
@@ -185,8 +190,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     setIsStarting(false);
     prevFrameDataRef.current = null;
     setFps(0);
-    setLeftMotionLevel(0);
-    setRightMotionLevel(0);
+    setZoneMotionLevels({});
     setCameraResolution('');
   };
 
@@ -199,7 +203,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     };
   }, []);
 
-  // Main Unified Canvas Render & Motion Loop
+  // Main Unified Canvas Render & 8-Zone Motion Detection Loop
   useEffect(() => {
     if (!isActive) return;
 
@@ -241,7 +245,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         lastFpsCalcTime = now;
       }
 
-      // 2. Draw Camera Video directly onto Main Canvas (Mirrored)
+      // 2. Draw Mirrored Camera Video directly onto Main Canvas
       if (video && video.readyState >= 2 && video.videoWidth > 0) {
         mCtx.save();
         mCtx.translate(w, 0);
@@ -249,7 +253,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         mCtx.drawImage(video, 0, 0, w, h);
         mCtx.restore();
 
-        // 3. Downscale to Process Canvas for Optical Flow
+        // 3. Process Optical Flow across all 8 zones
         const pCtx = procCanvas.getContext('2d', { willReadFrequently: true });
         if (pCtx) {
           pCtx.drawImage(video, 0, 0, 160, 120);
@@ -258,47 +262,41 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
           if (prevFrameDataRef.current && prevFrameDataRef.current.length === data.length) {
             const prev = prevFrameDataRef.current;
-            const midX = 80;
-            const targetMinY = Math.floor(120 * 0.18);
-            const targetMaxY = Math.floor(120 * 0.95);
+            const thresholdMultiplier = trackingMode === 'fingers' ? 0.65 : 0.9;
+            const rawThreshold = (220 + (100 - sensitivity) * 12) * thresholdMultiplier;
 
-            let leftMotionSum = 0;
-            let rightMotionSum = 0;
+            const newMotionLevels: Record<string, number> = {};
 
-            for (let y = targetMinY; y < targetMaxY; y += 2) {
-              for (let x = 0; x < 160; x += 2) {
-                const i = (y * 160 + x) * 4;
-                const diff = Math.abs(data[i] - prev[i]) +
-                             Math.abs(data[i + 1] - prev[i + 1]) +
-                             Math.abs(data[i + 2] - prev[i + 2]);
+            AIR_ZONES.forEach((zone) => {
+              const minX = Math.floor(zone.xRatio * 160);
+              const maxX = Math.floor((zone.xRatio + zone.wRatio) * 160);
+              const minY = Math.floor(zone.yRatio * 120);
+              const maxY = Math.floor((zone.yRatio + zone.hRatio) * 120);
 
-                if (diff > 25) {
-                  // In mirrored view, user's left hand is on left side of camera frame
-                  if (x < midX) {
-                    leftMotionSum += diff;
-                  } else {
-                    rightMotionSum += diff;
+              let zoneMotionSum = 0;
+
+              for (let py = minY; py < maxY; py += 2) {
+                for (let px = minX; px < maxX; px += 2) {
+                  const i = (py * 160 + px) * 4;
+                  const diff = Math.abs(data[i] - prev[i]) +
+                               Math.abs(data[i + 1] - prev[i + 1]) +
+                               Math.abs(data[i + 2] - prev[i + 2]);
+
+                  if (diff > 25) {
+                    zoneMotionSum += diff;
                   }
                 }
               }
-            }
 
-            // Sensitivity threshold
-            const thresholdMultiplier = trackingMode === 'fingers' ? 0.65 : 0.9;
-            const rawThreshold = (380 + (100 - sensitivity) * 18) * thresholdMultiplier;
+              const percent = Math.min(100, Math.round((zoneMotionSum / rawThreshold) * 100));
+              newMotionLevels[zone.id] = percent;
 
-            const leftPercent = Math.min(100, Math.round((leftMotionSum / rawThreshold) * 100));
-            const rightPercent = Math.min(100, Math.round((rightMotionSum / rawThreshold) * 100));
+              if (zoneMotionSum >= rawThreshold) {
+                triggerStrike(zone.id);
+              }
+            });
 
-            setLeftMotionLevel(leftPercent);
-            setRightMotionLevel(rightPercent);
-
-            if (leftMotionSum >= rawThreshold) {
-              triggerStrike('LEFT');
-            }
-            if (rightMotionSum >= rawThreshold) {
-              triggerStrike('RIGHT');
-            }
+            setZoneMotionLevels(newMotionLevels);
           }
 
           prevFrameDataRef.current = new Uint8ClampedArray(data);
@@ -312,72 +310,38 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         mCtx.fillText('Connecting video stream...', w / 2 - 100, h / 2);
       }
 
-      // 4. Render Glowing Strike Zones & HUD directly on top of video frame
-      const padW = w * 0.44;
-      const padH = h * 0.70;
-      const padY = h * 0.22;
+      // 4. Render all 8 Glowing Drum Strike Zones onto Canvas
+      AIR_ZONES.forEach((zone) => {
+        const zx = Math.round(zone.xRatio * w);
+        const zy = Math.round(zone.yRatio * h);
+        const zw = Math.round(zone.wRatio * w);
+        const zh = Math.round(zone.hRatio * h);
 
-      // Left Strike Zone (Color Coded)
-      const leftX = w * 0.04;
-      mCtx.save();
-      mCtx.strokeStyle = activeZoneFlash.LEFT ? '#FFFFFF' : leftZoneConfig.color;
-      mCtx.lineWidth = activeZoneFlash.LEFT ? 6 : 3;
-      mCtx.fillStyle = activeZoneFlash.LEFT ? `${leftZoneConfig.color}66` : `${leftZoneConfig.color}22`;
-      mCtx.beginPath();
-      mCtx.roundRect(leftX, padY, padW, padH, 16);
-      mCtx.fill();
-      mCtx.stroke();
+        const assignedHand = getInstrumentHand(zone.id, handedness, invertHands);
+        const zoneColor = assignedHand === 'RIGHT' ? '#FF6D00' : '#00E5FF';
+        const isFlashing = zoneFlashes[zone.id];
 
-      // Left Zone Header
-      mCtx.fillStyle = leftZoneConfig.color;
-      mCtx.font = 'bold 15px "Montserrat", sans-serif';
-      mCtx.fillText('LEFT AIR ZONE', leftX + 14, padY + 26);
+        mCtx.save();
+        mCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
+        mCtx.lineWidth = isFlashing ? 5 : 2.5;
+        mCtx.fillStyle = isFlashing ? `${zoneColor}66` : `${zoneColor}1F`;
+        mCtx.beginPath();
+        mCtx.roundRect(zx, zy, zw, zh, 12);
+        mCtx.fill();
+        mCtx.stroke();
 
-      // Drum Part Names
-      mCtx.fillStyle = '#FFFFFF';
-      mCtx.font = 'bold 13px "Montserrat", sans-serif';
-      mCtx.fillText(leftZoneConfig.drumParts, leftX + 14, padY + 50);
+        // Header
+        mCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
+        mCtx.font = 'bold 12px "Montserrat", sans-serif';
+        mCtx.fillText(zone.shortName, zx + 8, zy + 18);
 
-      // Strike Action
-      mCtx.fillStyle = leftZoneConfig.color;
-      mCtx.font = '11px monospace';
-      mCtx.fillText(
-        trackingMode === 'fingers' ? '👉 HIT WITH INDEX FINGER' : '🥢 HIT WITH DRUMSTICK',
-        leftX + 14,
-        padY + 74
-      );
-      mCtx.restore();
+        // Hand & Trigger Label
+        mCtx.fillStyle = '#FFFFFF';
+        mCtx.font = '10px monospace';
+        mCtx.fillText(assignedHand === 'RIGHT' ? 'RH [J/K]' : 'LH [D/F]', zx + 8, zy + 34);
 
-      // Right Strike Zone (Color Coded)
-      const rightX = w * 0.52;
-      mCtx.save();
-      mCtx.strokeStyle = activeZoneFlash.RIGHT ? '#FFFFFF' : rightZoneConfig.color;
-      mCtx.lineWidth = activeZoneFlash.RIGHT ? 6 : 3;
-      mCtx.fillStyle = activeZoneFlash.RIGHT ? `${rightZoneConfig.color}66` : `${rightZoneConfig.color}22`;
-      mCtx.beginPath();
-      mCtx.roundRect(rightX, padY, padW, padH, 16);
-      mCtx.fill();
-      mCtx.stroke();
-
-      // Right Zone Header
-      mCtx.fillStyle = rightZoneConfig.color;
-      mCtx.font = 'bold 15px "Montserrat", sans-serif';
-      mCtx.fillText('RIGHT AIR ZONE', rightX + 14, padY + 26);
-
-      // Drum Part Names
-      mCtx.fillStyle = '#FFFFFF';
-      mCtx.font = 'bold 13px "Montserrat", sans-serif';
-      mCtx.fillText(rightZoneConfig.drumParts, rightX + 14, padY + 50);
-
-      // Strike Action
-      mCtx.fillStyle = rightZoneConfig.color;
-      mCtx.font = '11px monospace';
-      mCtx.fillText(
-        trackingMode === 'fingers' ? '👉 HIT WITH INDEX FINGER' : '🥢 HIT WITH DRUMSTICK',
-        rightX + 14,
-        padY + 74
-      );
-      mCtx.restore();
+        mCtx.restore();
+      });
 
       animId = requestAnimationFrame(renderAndDetect);
     };
@@ -387,7 +351,27 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [isActive, sensitivity, trackingMode, triggerStrike, activeZoneFlash, leftZoneConfig, rightZoneConfig]);
+  }, [isActive, sensitivity, trackingMode, triggerStrike, zoneFlashes, handedness, invertHands]);
+
+  // Direct canvas click handler to find which zone was clicked
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!mainCanvasRef.current) return;
+    const rect = mainCanvasRef.current.getBoundingClientRect();
+    const clickXRatio = (e.clientX - rect.left) / rect.width;
+    const clickYRatio = (e.clientY - rect.top) / rect.height;
+
+    const clickedZone = AIR_ZONES.find(
+      (z) =>
+        clickXRatio >= z.xRatio &&
+        clickXRatio <= z.xRatio + z.wRatio &&
+        clickYRatio >= z.yRatio &&
+        clickYRatio <= z.yRatio + z.hRatio
+    );
+
+    if (clickedZone) {
+      triggerStrike(clickedZone.id);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-2 rounded-xl bg-gradient-to-b from-slate-900 via-[#0e1628] to-[#070b14] border border-slate-800 p-3 shadow-xl overflow-hidden">
@@ -399,7 +383,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           </div>
           <div>
             <h3 className="font-display font-black text-xs sm:text-sm text-white flex items-center gap-2">
-              AIR DRUMMING
+              AIR DRUMMING • 8 DRUM ZONES
               {isActive && (
                 <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
                   ● {fps} FPS {cameraResolution ? `• ${cameraResolution}` : ''}
@@ -407,7 +391,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               )}
             </h3>
             <p className="text-[10px] font-mono-code text-slate-400">
-              Real-time video canvas motion tracking for drumsticks & index fingers
+              8-zone 3D spatial motion tracking for drumsticks & index fingers
             </p>
           </div>
         </div>
@@ -447,14 +431,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         </div>
       )}
 
-      {/* Viewport: Direct Canvas Renderer (Guaranteed No Layering / Blackscreen Glitches) */}
+      {/* Viewport: Direct Canvas Renderer with 8 Spatial Drum Zones */}
       <div className="relative w-full aspect-[16/9] max-h-[250px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
-        {/* Main Visible Canvas: Draws Live Video + Glowing Strike Zones */}
+        {/* Main Visible Canvas: Draws Live Video + 8 Glowing Strike Zones */}
         <canvas
           ref={mainCanvasRef}
           width={640}
           height={360}
-          className={`w-full h-full object-cover transition-opacity duration-200 ${
+          onClick={handleCanvasClick}
+          className={`w-full h-full object-cover cursor-pointer transition-opacity duration-200 ${
             isActive ? 'opacity-100' : 'opacity-0'
           }`}
         />
@@ -471,7 +456,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                 Air Drumming Sensor Offline
               </h4>
               <p className="text-[11px] font-mono-code text-slate-400">
-                Click below to turn on your webcam. Position your hands in the glowing strike zones to play drums in the air!
+                Click below to turn on your webcam. 8 color-coded zones will appear for each drum part!
               </p>
             </div>
             <button
@@ -484,89 +469,41 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </button>
           </div>
         )}
-
-        {/* Direct Touch / Click Strike Zones on Top of Video */}
-        {isActive && (
-          <div className="absolute inset-0 grid grid-cols-2 pointer-events-auto">
-            <div
-              onClick={() => triggerStrike('LEFT')}
-              className="cursor-pointer active:bg-cyan-500/20 transition-colors"
-              title="Tap to trigger Left Air Strike"
-            />
-            <div
-              onClick={() => triggerStrike('RIGHT')}
-              className="cursor-pointer active:bg-orange-500/20 transition-colors"
-              title="Tap to trigger Right Air Strike"
-            />
-          </div>
-        )}
       </div>
 
-      {/* Color-Coded Drum Part Zone Cards with Motion Gauges & Hit Counters */}
-      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono-code">
-        {/* Left Zone Card */}
-        <div
-          onClick={() => triggerStrike('LEFT')}
-          className={`flex flex-col gap-1 p-2 rounded-lg border cursor-pointer select-none transition-all active:scale-[0.98] ${
-            activeZoneFlash.LEFT
-              ? 'bg-cyan-500/40 border-white shadow-[0_0_15px_#00E5FF]'
-              : leftZoneConfig.bgClass
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="font-bold flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: leftZoneConfig.color }} />
-              LEFT AIR ZONE
-            </span>
-            <span className="font-black text-xs">{isActive ? `${leftMotionLevel}%` : '0%'}</span>
-          </div>
-          <div className="font-display font-bold text-xs text-white truncate">
-            {leftZoneConfig.drumParts}
-          </div>
-          <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden mt-0.5 relative">
-            <div
-              className={`h-full ${leftZoneConfig.barColorClass} transition-all duration-75`}
-              style={{ width: `${Math.min(100, leftMotionLevel)}%` }}
-            />
-            <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/60" />
-          </div>
-          <div className="flex justify-between items-center text-[10px] text-slate-400 mt-0.5">
-            <span>Hits: <strong className="text-white">{leftHitCount}</strong></span>
-            <span className="text-[9px] opacity-75">Click / Air Strike</span>
-          </div>
-        </div>
+      {/* 8 Drum Part Live Status Grid */}
+      <div className="grid grid-cols-4 sm:grid-cols-8 gap-1 text-[10px] font-mono-code">
+        {AIR_ZONES.map((zone) => {
+          const assignedHand = getInstrumentHand(zone.id, handedness, invertHands);
+          const isRight = assignedHand === 'RIGHT';
+          const motion = zoneMotionLevels[zone.id] || 0;
+          const isFlashing = zoneFlashes[zone.id];
+          const hitCount = zoneHitCounts[zone.id] || 0;
 
-        {/* Right Zone Card */}
-        <div
-          onClick={() => triggerStrike('RIGHT')}
-          className={`flex flex-col gap-1 p-2 rounded-lg border cursor-pointer select-none transition-all active:scale-[0.98] ${
-            activeZoneFlash.RIGHT
-              ? 'bg-orange-500/40 border-white shadow-[0_0_15px_#FF6D00]'
-              : rightZoneConfig.bgClass
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="font-bold flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: rightZoneConfig.color }} />
-              RIGHT AIR ZONE
-            </span>
-            <span className="font-black text-xs">{isActive ? `${rightMotionLevel}%` : '0%'}</span>
-          </div>
-          <div className="font-display font-bold text-xs text-white truncate">
-            {rightZoneConfig.drumParts}
-          </div>
-          <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden mt-0.5 relative">
-            <div
-              className={`h-full ${rightZoneConfig.barColorClass} transition-all duration-75`}
-              style={{ width: `${Math.min(100, rightMotionLevel)}%` }}
-            />
-            <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/60" />
-          </div>
-          <div className="flex justify-between items-center text-[10px] text-slate-400 mt-0.5">
-            <span>Hits: <strong className="text-white">{rightHitCount}</strong></span>
-            <span className="text-[9px] opacity-75">Click / Air Strike</span>
-          </div>
-        </div>
+          return (
+            <button
+              key={zone.id}
+              onClick={() => triggerStrike(zone.id)}
+              className={`flex flex-col items-center justify-between p-1.5 rounded-lg border transition-all active:scale-95 ${
+                isFlashing
+                  ? 'bg-white text-black border-white shadow-[0_0_12px_#FFF]'
+                  : isRight
+                  ? 'bg-orange-950/40 border-orange-500/50 text-orange-200 hover:border-orange-400'
+                  : 'bg-cyan-950/40 border-cyan-500/50 text-cyan-200 hover:border-cyan-400'
+              }`}
+              title={`Click or strike ${zone.name} in the air`}
+            >
+              <span className="font-bold truncate w-full text-center">{zone.shortName}</span>
+              <div className="w-full h-1 rounded-full bg-slate-900 overflow-hidden my-0.5">
+                <div
+                  className={`h-full ${isRight ? 'bg-orange-500' : 'bg-cyan-400'} transition-all duration-75`}
+                  style={{ width: `${Math.min(100, motion)}%` }}
+                />
+              </div>
+              <span className="text-[9px] opacity-75">{hitCount > 0 ? `${hitCount} hits` : (isRight ? 'RH' : 'LH')}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Controls: Mode & Sensitivity Presets */}
@@ -630,32 +567,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             <button onClick={() => setSensitivity(85)} className="hover:text-white">Ultra (85%)</button>
           </div>
         </div>
-      </div>
-
-      {/* Quick Manual Test Buttons */}
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          onClick={() => triggerStrike('LEFT')}
-          className={`py-1.5 px-2 rounded-lg font-mono-code font-bold text-[11px] flex items-center justify-center gap-1 transition-colors border ${
-            isFloorBassRight
-              ? 'bg-cyan-950 hover:bg-cyan-900 border-cyan-500/40 text-cyan-200'
-              : 'bg-orange-950 hover:bg-orange-900 border-orange-500/40 text-orange-200'
-          }`}
-        >
-          <Zap className="w-3 h-3" />
-          <span>Test Left Air Strike [D/F]</span>
-        </button>
-        <button
-          onClick={() => triggerStrike('RIGHT')}
-          className={`py-1.5 px-2 rounded-lg font-mono-code font-bold text-[11px] flex items-center justify-center gap-1 transition-colors border ${
-            isFloorBassRight
-              ? 'bg-orange-950 hover:bg-orange-900 border-orange-500/40 text-orange-200'
-              : 'bg-cyan-950 hover:bg-cyan-900 border-cyan-500/40 text-cyan-200'
-          }`}
-        >
-          <Zap className="w-3 h-3" />
-          <span>Test Right Air Strike [J/K]</span>
-        </button>
       </div>
     </div>
   );
