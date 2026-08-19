@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Hand, Handedness } from '../types/drum';
-import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, Zap, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, Zap, AlertCircle, Sparkles } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (hand: Hand) => void;
@@ -14,9 +14,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   invertHands = false,
 }) => {
   const [isActive, setIsActive] = useState<boolean>(false);
-  const [isInitializing, setIsInitializing] = useState<boolean>(false);
+  const [isStarting, setIsStarting] = useState<boolean>(false);
   const [trackingMode, setTrackingMode] = useState<'fingers' | 'sticks'>('fingers');
-  const [sensitivity, setSensitivity] = useState<number>(65); // Default to high-responsiveness (65%)
+  const [sensitivity, setSensitivity] = useState<number>(65); // High responsiveness
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [fps, setFps] = useState<number>(0);
   const [leftMotionLevel, setLeftMotionLevel] = useState<number>(0);
@@ -77,44 +77,39 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const startCamera = async () => {
     try {
       setCameraError(null);
-      setIsInitializing(true);
+      setIsStarting(true);
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera API (getUserMedia) is not supported by your browser or requires HTTPS.');
+        throw new Error('Camera access requires HTTPS or a supported browser.');
       }
 
-      // Try multiple constraint fallbacks for universal device compatibility
+      // Try user-facing camera first, then general camera
       let stream: MediaStream | null = null;
-      const constraintOptions: MediaStreamConstraints[] = [
-        {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
           video: {
             width: { ideal: 640 },
             height: { ideal: 480 },
             facingMode: 'user',
           },
           audio: false,
-        },
-        {
-          video: { facingMode: 'user' },
-          audio: false,
-        },
-        {
-          video: true,
-          audio: false,
-        },
-      ];
-
-      for (const constraints of constraintOptions) {
+        });
+      } catch {
         try {
-          stream = await navigator.mediaDevices.getUserMedia(constraints);
-          if (stream) break;
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user' },
+            audio: false,
+          });
         } catch {
-          // Try next fallback
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
         }
       }
 
       if (!stream) {
-        throw new Error('Unable to access camera. Please verify camera permissions in your browser address bar.');
+        throw new Error('Could not start camera stream.');
       }
 
       streamRef.current = stream;
@@ -125,29 +120,21 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         video.setAttribute('playsinline', 'true');
         video.setAttribute('webkit-playsinline', 'true');
         video.muted = true;
-
-        await new Promise<void>((resolve) => {
-          video.onloadedmetadata = async () => {
-            try {
-              await video.play();
-            } catch (playErr) {
-              console.warn('video.play() auto-resume:', playErr);
-            }
-            resolve();
-          };
-          // Timeout fallback in case onloadedmetadata doesn't fire immediately
-          setTimeout(() => resolve(), 800);
-        });
+        try {
+          await video.play();
+        } catch (e) {
+          console.warn('video.play() auto-play error:', e);
+        }
       }
 
       setIsActive(true);
-      setIsInitializing(false);
+      setIsStarting(false);
     } catch (err: unknown) {
       console.error('Camera access error:', err);
       const msg = err instanceof Error ? err.message : 'Camera access denied or unavailable.';
       setCameraError(msg);
       setIsActive(false);
-      setIsInitializing(false);
+      setIsStarting(false);
     }
   };
 
@@ -160,12 +147,29 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       videoRef.current.srcObject = null;
     }
     setIsActive(false);
-    setIsInitializing(false);
+    setIsStarting(false);
     prevFrameDataRef.current = null;
     setFps(0);
     setLeftMotionLevel(0);
     setRightMotionLevel(0);
   };
+
+  // Re-attach stream whenever video element mounts or becomes active
+  useEffect(() => {
+    if (isActive && streamRef.current && videoRef.current && videoRef.current.srcObject !== streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [isActive]);
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, []);
 
   // Motion processing loop
   useEffect(() => {
@@ -222,8 +226,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                            Math.abs(data[i + 1] - prev[i + 1]) +
                            Math.abs(data[i + 2] - prev[i + 2]);
 
-              // Noise threshold of 28 for high responsiveness
-              if (diff > 28) {
+              // Noise threshold of 26
+              if (diff > 26) {
                 // Since the video is mirrored (scale-x-[-1]), user's left hand is on left side of camera
                 if (x < midX) {
                   leftMotionSum += diff;
@@ -235,9 +239,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           }
 
           // Responsive sensitivity curve:
-          // Sensitivity 15-95 (default 65)
           const thresholdMultiplier = trackingMode === 'fingers' ? 0.65 : 0.9;
-          const rawThreshold = (450 + (100 - sensitivity) * 22) * thresholdMultiplier;
+          const rawThreshold = (400 + (100 - sensitivity) * 20) * thresholdMultiplier;
 
           const leftPercent = Math.min(100, Math.round((leftMotionSum / rawThreshold) * 100));
           const rightPercent = Math.min(100, Math.round((rightMotionSum / rawThreshold) * 100));
@@ -264,8 +267,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         oCtx.clearRect(0, 0, w, h);
 
         const padW = w * 0.44;
-        const padH = h * 0.68;
-        const padY = h * 0.24;
+        const padH = h * 0.70;
+        const padY = h * 0.22;
 
         // Left Strike Zone (Color Coded)
         const leftX = w * 0.04;
@@ -353,12 +356,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               AIR DRUMMING
               {isActive && (
                 <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
-                  ● {fps} FPS • READY
+                  ● {fps} FPS • LIVE SENSOR
                 </span>
               )}
             </h3>
             <p className="text-[10px] font-mono-code text-slate-400">
-              High-responsiveness visual motion tracking for drumsticks & index fingers
+              Visual motion tracking for drumsticks & index fingers
             </p>
           </div>
         </div>
@@ -375,11 +378,11 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           ) : (
             <button
               onClick={startCamera}
-              disabled={isInitializing}
+              disabled={isStarting}
               className="flex items-center gap-1 px-3 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all disabled:opacity-50"
             >
               <Video className="w-3.5 h-3.5" />
-              <span>{isInitializing ? 'STARTING CAMERA...' : 'START AIR DRUMMING'}</span>
+              <span>{isStarting ? 'CONNECTING CAMERA...' : 'START AIR DRUMMING'}</span>
             </button>
           )}
         </div>
@@ -389,237 +392,235 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         <div className="p-2.5 rounded-lg bg-red-950/70 border border-red-500/50 text-red-200 text-[11px] font-mono-code flex items-start gap-2">
           <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
           <div className="flex flex-col gap-0.5">
-            <strong className="text-red-300 font-bold">Camera Access Notice:</strong>
+            <strong className="text-red-300 font-bold">Camera Permission Required:</strong>
             <span>{cameraError}</span>
             <span className="text-[10px] text-slate-400 mt-1">
-              💡 Tip: You can also tap the Left and Right strike zones directly on your touchscreen or click the test buttons below!
+              💡 Tip: Click "Allow" when your browser prompts for camera access, or click the zones/buttons below to play!
             </span>
           </div>
         </div>
       )}
 
-      {/* Viewport */}
-      {isActive ? (
-        <div className="flex flex-col gap-2">
-          {/* Live Video with Canvas Overlay & Direct Tap Support */}
-          <div className="relative w-full aspect-[16/9] max-h-[240px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover transform scale-x-[-1]"
-            />
+      {/* Viewport - Always Mounted in DOM so video element is ready */}
+      <div className="relative w-full aspect-[16/9] max-h-[250px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
+        {/* Live HTML Video Element */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`w-full h-full object-cover transform scale-x-[-1] transition-opacity duration-300 ${
+            isActive ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
 
-            <canvas
-              ref={overlayCanvasRef}
-              width={640}
-              height={360}
-              className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-            />
+        {/* Overlay Canvas */}
+        <canvas
+          ref={overlayCanvasRef}
+          width={640}
+          height={360}
+          className={`absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-300 ${
+            isActive ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
 
-            {/* Direct Touch / Click Strike Zones on Top of Video */}
-            <div className="absolute inset-0 grid grid-cols-2 pointer-events-auto">
-              <div
-                onClick={() => triggerStrike('LEFT')}
-                className="cursor-pointer active:bg-cyan-500/20 transition-colors"
-                title="Tap to trigger Left Air Strike"
-              />
-              <div
-                onClick={() => triggerStrike('RIGHT')}
-                className="cursor-pointer active:bg-orange-500/20 transition-colors"
-                title="Tap to trigger Right Air Strike"
-              />
+        {/* When Camera is Offline: Sleek Interactive Standby Screen */}
+        {!isActive && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-[#0b1020] to-[#060a14] p-4 text-center gap-3">
+            <div className="w-12 h-12 rounded-full bg-emerald-950/80 border border-emerald-500/50 flex items-center justify-center text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+              <Video className="w-6 h-6" />
             </div>
+            <div className="flex flex-col gap-1 max-w-sm">
+              <h4 className="font-display font-black text-sm text-white flex items-center justify-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-emerald-400" />
+                Air Drumming Sensor Offline
+              </h4>
+              <p className="text-[11px] font-mono-code text-slate-400">
+                Click below to turn on your webcam. Position your hands in the glowing strike zones to play drums in the air!
+              </p>
+            </div>
+            <button
+              onClick={startCamera}
+              disabled={isStarting}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-display font-black text-xs shadow-[0_0_15px_rgba(16,185,129,0.5)] transition-all active:scale-95 disabled:opacity-50"
+            >
+              {isStarting ? 'STARTING CAMERA...' : 'START AIR DRUMMING'}
+            </button>
           </div>
+        )}
 
-          {/* Color-Coded Drum Part Zone Cards with Motion Gauges & Hit Counters */}
-          <div className="grid grid-cols-2 gap-2 text-[11px] font-mono-code">
-            {/* Left Zone Card */}
+        {/* Direct Touch / Click Strike Zones on Top of Video */}
+        {isActive && (
+          <div className="absolute inset-0 grid grid-cols-2 pointer-events-auto">
             <div
               onClick={() => triggerStrike('LEFT')}
-              className={`flex flex-col gap-1 p-2 rounded-lg border cursor-pointer select-none transition-all active:scale-[0.98] ${
-                activeZoneFlash.LEFT
-                  ? 'bg-cyan-500/40 border-white shadow-[0_0_15px_#00E5FF]'
-                  : leftZoneConfig.bgClass
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-bold flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: leftZoneConfig.color }} />
-                  LEFT ZONE
-                </span>
-                <span className="font-black text-xs">{leftMotionLevel}%</span>
-              </div>
-              <div className="font-display font-bold text-xs text-white truncate">
-                {leftZoneConfig.drumParts}
-              </div>
-              <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden mt-0.5 relative">
-                <div
-                  className={`h-full ${leftZoneConfig.barColorClass} transition-all duration-75`}
-                  style={{ width: `${Math.min(100, leftMotionLevel)}%` }}
-                />
-                {/* 100% Trigger Line */}
-                <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/60" />
-              </div>
-              <div className="flex justify-between items-center text-[10px] text-slate-400 mt-0.5">
-                <span>Hits: <strong className="text-white">{leftHitCount}</strong></span>
-                <span className="text-[9px] opacity-75">Click / Air Strike</span>
-              </div>
-            </div>
-
-            {/* Right Zone Card */}
+              className="cursor-pointer active:bg-cyan-500/20 transition-colors"
+              title="Tap to trigger Left Air Strike"
+            />
             <div
               onClick={() => triggerStrike('RIGHT')}
-              className={`flex flex-col gap-1 p-2 rounded-lg border cursor-pointer select-none transition-all active:scale-[0.98] ${
-                activeZoneFlash.RIGHT
-                  ? 'bg-orange-500/40 border-white shadow-[0_0_15px_#FF6D00]'
-                  : rightZoneConfig.bgClass
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-bold flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: rightZoneConfig.color }} />
-                  RIGHT ZONE
-                </span>
-                <span className="font-black text-xs">{rightMotionLevel}%</span>
-              </div>
-              <div className="font-display font-bold text-xs text-white truncate">
-                {rightZoneConfig.drumParts}
-              </div>
-              <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden mt-0.5 relative">
-                <div
-                  className={`h-full ${rightZoneConfig.barColorClass} transition-all duration-75`}
-                  style={{ width: `${Math.min(100, rightMotionLevel)}%` }}
-                />
-                {/* 100% Trigger Line */}
-                <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/60" />
-              </div>
-              <div className="flex justify-between items-center text-[10px] text-slate-400 mt-0.5">
-                <span>Hits: <strong className="text-white">{rightHitCount}</strong></span>
-                <span className="text-[9px] opacity-75">Click / Air Strike</span>
-              </div>
-            </div>
+              className="cursor-pointer active:bg-orange-500/20 transition-colors"
+              title="Tap to trigger Right Air Strike"
+            />
           </div>
+        )}
+      </div>
 
-          {/* Controls: Mode & Sensitivity Presets */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-950/80 p-2 rounded-lg border border-slate-800 text-xs">
-            {/* Tracking Mode Switcher */}
-            <div className="flex flex-col gap-1">
-              <span className="font-mono-code font-bold text-slate-300 flex items-center gap-1 text-[11px]">
-                <HandIcon className="w-3 h-3 text-cyan-400" />
-                STRIKE TRACKING TYPE:
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => {
-                    setTrackingMode('fingers');
-                    setSensitivity(70);
-                  }}
-                  className={`flex-1 py-1 rounded font-display font-bold text-[11px] transition-all ${
-                    trackingMode === 'fingers'
-                      ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-black shadow-[0_0_8px_#00E5FF]'
-                      : 'bg-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  👉 INDEX FINGERS
-                </button>
-                <button
-                  onClick={() => {
-                    setTrackingMode('sticks');
-                    setSensitivity(60);
-                  }}
-                  className={`flex-1 py-1 rounded font-display font-bold text-[11px] transition-all ${
-                    trackingMode === 'sticks'
-                      ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-black shadow-[0_0_8px_#FF6D00]'
-                      : 'bg-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  🥢 DRUMSTICKS
-                </button>
-              </div>
-            </div>
-
-            {/* Motion Sensitivity Presets & Slider */}
-            <div className="flex flex-col gap-1">
-              <div className="flex justify-between font-mono-code text-slate-300 text-[11px]">
-                <span className="flex items-center gap-1">
-                  <Sliders className="w-3 h-3 text-amber-400" />
-                  MOTION SENSITIVITY:
-                </span>
-                <span className="text-cyan-400 font-bold">{sensitivity}%</span>
-              </div>
-              <input
-                type="range"
-                min="20"
-                max="95"
-                value={sensitivity}
-                onChange={(e) => setSensitivity(Number(e.target.value))}
-                className="w-full accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
-              />
-              <div className="flex justify-between text-[9px] font-mono-code text-slate-400">
-                <button onClick={() => setSensitivity(45)} className="hover:text-white">Normal (45%)</button>
-                <button onClick={() => setSensitivity(65)} className="hover:text-white font-bold text-amber-300">Responsive (65%)</button>
-                <button onClick={() => setSensitivity(85)} className="hover:text-white">Ultra (85%)</button>
-              </div>
-            </div>
+      {/* Color-Coded Drum Part Zone Cards with Motion Gauges & Hit Counters */}
+      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono-code">
+        {/* Left Zone Card */}
+        <div
+          onClick={() => triggerStrike('LEFT')}
+          className={`flex flex-col gap-1 p-2 rounded-lg border cursor-pointer select-none transition-all active:scale-[0.98] ${
+            activeZoneFlash.LEFT
+              ? 'bg-cyan-500/40 border-white shadow-[0_0_15px_#00E5FF]'
+              : leftZoneConfig.bgClass
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-bold flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: leftZoneConfig.color }} />
+              LEFT AIR ZONE
+            </span>
+            <span className="font-black text-xs">{isActive ? `${leftMotionLevel}%` : '0%'}</span>
           </div>
+          <div className="font-display font-bold text-xs text-white truncate">
+            {leftZoneConfig.drumParts}
+          </div>
+          <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden mt-0.5 relative">
+            <div
+              className={`h-full ${leftZoneConfig.barColorClass} transition-all duration-75`}
+              style={{ width: `${Math.min(100, leftMotionLevel)}%` }}
+            />
+            <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/60" />
+          </div>
+          <div className="flex justify-between items-center text-[10px] text-slate-400 mt-0.5">
+            <span>Hits: <strong className="text-white">{leftHitCount}</strong></span>
+            <span className="text-[9px] opacity-75">Click / Air Strike</span>
+          </div>
+        </div>
 
-          {/* Quick Manual Test Buttons */}
-          <div className="grid grid-cols-2 gap-2">
+        {/* Right Zone Card */}
+        <div
+          onClick={() => triggerStrike('RIGHT')}
+          className={`flex flex-col gap-1 p-2 rounded-lg border cursor-pointer select-none transition-all active:scale-[0.98] ${
+            activeZoneFlash.RIGHT
+              ? 'bg-orange-500/40 border-white shadow-[0_0_15px_#FF6D00]'
+              : rightZoneConfig.bgClass
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-bold flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: rightZoneConfig.color }} />
+              RIGHT AIR ZONE
+            </span>
+            <span className="font-black text-xs">{isActive ? `${rightMotionLevel}%` : '0%'}</span>
+          </div>
+          <div className="font-display font-bold text-xs text-white truncate">
+            {rightZoneConfig.drumParts}
+          </div>
+          <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden mt-0.5 relative">
+            <div
+              className={`h-full ${rightZoneConfig.barColorClass} transition-all duration-75`}
+              style={{ width: `${Math.min(100, rightMotionLevel)}%` }}
+            />
+            <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/60" />
+          </div>
+          <div className="flex justify-between items-center text-[10px] text-slate-400 mt-0.5">
+            <span>Hits: <strong className="text-white">{rightHitCount}</strong></span>
+            <span className="text-[9px] opacity-75">Click / Air Strike</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Controls: Mode & Sensitivity Presets */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-950/80 p-2 rounded-lg border border-slate-800 text-xs">
+        {/* Tracking Mode Switcher */}
+        <div className="flex flex-col gap-1">
+          <span className="font-mono-code font-bold text-slate-300 flex items-center gap-1 text-[11px]">
+            <HandIcon className="w-3 h-3 text-cyan-400" />
+            STRIKE TRACKING TYPE:
+          </span>
+          <div className="flex items-center gap-1">
             <button
-              onClick={() => triggerStrike('LEFT')}
-              className={`py-1.5 px-2 rounded-lg font-mono-code font-bold text-[11px] flex items-center justify-center gap-1 transition-colors border ${
-                isFloorBassRight
-                  ? 'bg-cyan-950 hover:bg-cyan-900 border-cyan-500/40 text-cyan-200'
-                  : 'bg-orange-950 hover:bg-orange-900 border-orange-500/40 text-orange-200'
+              onClick={() => {
+                setTrackingMode('fingers');
+                setSensitivity(70);
+              }}
+              className={`flex-1 py-1 rounded font-display font-bold text-[11px] transition-all ${
+                trackingMode === 'fingers'
+                  ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-black shadow-[0_0_8px_#00E5FF]'
+                  : 'bg-slate-800 text-slate-400 hover:text-white'
               }`}
             >
-              <Zap className="w-3 h-3" />
-              <span>Test Left Air Strike [D/F]</span>
+              👉 INDEX FINGERS
             </button>
             <button
-              onClick={() => triggerStrike('RIGHT')}
-              className={`py-1.5 px-2 rounded-lg font-mono-code font-bold text-[11px] flex items-center justify-center gap-1 transition-colors border ${
-                isFloorBassRight
-                  ? 'bg-orange-950 hover:bg-orange-900 border-orange-500/40 text-orange-200'
-                  : 'bg-cyan-950 hover:bg-cyan-900 border-cyan-500/40 text-cyan-200'
+              onClick={() => {
+                setTrackingMode('sticks');
+                setSensitivity(60);
+              }}
+              className={`flex-1 py-1 rounded font-display font-bold text-[11px] transition-all ${
+                trackingMode === 'sticks'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-black shadow-[0_0_8px_#FF6D00]'
+                  : 'bg-slate-800 text-slate-400 hover:text-white'
               }`}
             >
-              <Zap className="w-3 h-3" />
-              <span>Test Right Air Strike [J/K]</span>
+              🥢 DRUMSTICKS
             </button>
           </div>
         </div>
-      ) : (
-        <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-950/60 border border-slate-800 text-xs font-mono-code text-slate-300">
-          <div className="flex items-center gap-1.5 text-emerald-300 font-bold">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Air Drumming Motion Sensor Ready</span>
+
+        {/* Motion Sensitivity Presets & Slider */}
+        <div className="flex flex-col gap-1">
+          <div className="flex justify-between font-mono-code text-slate-300 text-[11px]">
+            <span className="flex items-center gap-1">
+              <Sliders className="w-3 h-3 text-amber-400" />
+              MOTION SENSITIVITY:
+            </span>
+            <span className="text-cyan-400 font-bold">{sensitivity}%</span>
           </div>
-          <p className="text-[11px] text-slate-400">
-            Click <strong className="text-emerald-400">"START AIR DRUMMING"</strong> to activate camera tracking. Position your hands or sticks in front of the camera:
-          </p>
-          <div className="grid grid-cols-2 gap-2 mt-1">
-            <div className={`p-2 rounded border ${leftZoneConfig.bgClass}`}>
-              <div className="font-bold flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: leftZoneConfig.color }} />
-                LEFT ZONE:
-              </div>
-              <div className="text-white font-bold text-[11px]">{leftZoneConfig.drumParts}</div>
-              <div className="text-[10px] opacity-75 mt-0.5">👉 Index Finger or 🥢 Left Stick</div>
-            </div>
-            <div className={`p-2 rounded border ${rightZoneConfig.bgClass}`}>
-              <div className="font-bold flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: rightZoneConfig.color }} />
-                RIGHT ZONE:
-              </div>
-              <div className="text-white font-bold text-[11px]">{rightZoneConfig.drumParts}</div>
-              <div className="text-[10px] opacity-75 mt-0.5">👉 Index Finger or 🥢 Right Stick</div>
-            </div>
+          <input
+            type="range"
+            min="20"
+            max="95"
+            value={sensitivity}
+            onChange={(e) => setSensitivity(Number(e.target.value))}
+            className="w-full accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+          />
+          <div className="flex justify-between text-[9px] font-mono-code text-slate-400">
+            <button onClick={() => setSensitivity(45)} className="hover:text-white">Normal (45%)</button>
+            <button onClick={() => setSensitivity(65)} className="hover:text-white font-bold text-amber-300">Responsive (65%)</button>
+            <button onClick={() => setSensitivity(85)} className="hover:text-white">Ultra (85%)</button>
           </div>
         </div>
-      )}
+      </div>
+
+      {/* Quick Manual Test Buttons */}
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          onClick={() => triggerStrike('LEFT')}
+          className={`py-1.5 px-2 rounded-lg font-mono-code font-bold text-[11px] flex items-center justify-center gap-1 transition-colors border ${
+            isFloorBassRight
+              ? 'bg-cyan-950 hover:bg-cyan-900 border-cyan-500/40 text-cyan-200'
+              : 'bg-orange-950 hover:bg-orange-900 border-orange-500/40 text-orange-200'
+          }`}
+        >
+          <Zap className="w-3 h-3" />
+          <span>Test Left Air Strike [D/F]</span>
+        </button>
+        <button
+          onClick={() => triggerStrike('RIGHT')}
+          className={`py-1.5 px-2 rounded-lg font-mono-code font-bold text-[11px] flex items-center justify-center gap-1 transition-colors border ${
+            isFloorBassRight
+              ? 'bg-orange-950 hover:bg-orange-900 border-orange-500/40 text-orange-200'
+              : 'bg-cyan-950 hover:bg-cyan-900 border-cyan-500/40 text-cyan-200'
+          }`}
+        >
+          <Zap className="w-3 h-3" />
+          <span>Test Right Air Strike [J/K]</span>
+        </button>
+      </div>
     </div>
   );
 };
