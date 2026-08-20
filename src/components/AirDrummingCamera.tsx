@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Hand, Handedness, DrumInstrumentId } from '../types/drum';
 import { getInstrumentHand } from '../data/beatLibrary';
-import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, RefreshCw, CheckCircle2, Play } from 'lucide-react';
+import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, RefreshCw, CheckCircle2, Play, Info, Sparkles } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
@@ -51,6 +51,11 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [cameraResolution, setCameraResolution] = useState<string>('');
   const [cameraDeviceLabel, setCameraDeviceLabel] = useState<string>('');
   const [isVideoPaused, setIsVideoPaused] = useState<boolean>(false);
+  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
+  const [diagnosticLogs, setDiagnosticLogs] = useState<string[]>([]);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
 
   // Per-zone motion levels & flash states
   const [zoneMotionLevels, setZoneMotionLevels] = useState<Record<string, number>>({});
@@ -64,6 +69,11 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
   const prevFrameDataRef = useRef<Uint8ClampedArray | null>(null);
   const lastZoneStrikeTimeRef = useRef<Record<string, number>>({});
+
+  const addLog = (msg: string) => {
+    const time = new Date().toLocaleTimeString();
+    setDiagnosticLogs((prev) => [`[${time}] ${msg}`, ...prev.slice(0, 15)]);
+  };
 
   const triggerStrike = useCallback((instId: DrumInstrumentId) => {
     const now = performance.now();
@@ -82,19 +92,46 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     onAirStrike(instId, assignedHand);
   }, [onAirStrike, handedness, invertHands]);
 
-  const startCamera = async () => {
+  // Enumerate camera devices
+  const refreshDevices = useCallback(async () => {
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevs = devices.filter((d) => d.kind === 'videoinput');
+        setAvailableDevices(videoDevs);
+        if (videoDevs.length > 0 && !selectedDeviceId) {
+          setSelectedDeviceId(videoDevs[0].deviceId);
+        }
+      }
+    } catch (e) {
+      console.warn('Device enumeration error:', e);
+    }
+  }, [selectedDeviceId]);
+
+  useEffect(() => {
+    refreshDevices();
+  }, [refreshDevices]);
+
+  const startCamera = async (overrideDeviceId?: string) => {
     try {
       setCameraError(null);
       setIsStarting(true);
       setIsVideoPaused(false);
+      setIsDemoMode(false);
+      addLog('Requesting camera permissions...');
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera API requires HTTPS or a supported browser.');
+        throw new Error('Camera API requires HTTPS or a modern browser.');
       }
+
+      const targetDevice = overrideDeviceId || selectedDeviceId;
 
       // Progressive constraint fallback
       let stream: MediaStream | null = null;
       const constraintsList: MediaStreamConstraints[] = [
+        ...(targetDevice
+          ? [{ video: { deviceId: { exact: targetDevice } }, audio: false }]
+          : []),
         {
           video: {
             width: { ideal: 640 },
@@ -116,14 +153,17 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       for (const constraints of constraintsList) {
         try {
           stream = await navigator.mediaDevices.getUserMedia(constraints);
-          if (stream) break;
-        } catch {
-          // Try next fallback
+          if (stream) {
+            addLog(`Acquired stream successfully with ${JSON.stringify(constraints.video)}`);
+            break;
+          }
+        } catch (err: unknown) {
+          addLog(`Constraint failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
       if (!stream) {
-        throw new Error('Unable to access camera. Please allow camera permissions in your browser address bar.');
+        throw new Error('Unable to access camera. Please check browser permissions and Windows/Mac camera privacy settings.');
       }
 
       streamRef.current = stream;
@@ -131,6 +171,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {
         setCameraDeviceLabel(videoTrack.label || 'Webcam');
+        addLog(`Video Track: ${videoTrack.label} (${videoTrack.readyState})`);
       }
 
       const video = videoRef.current;
@@ -145,11 +186,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
         try {
           await video.play();
+          addLog('video.play() called successfully');
           if (video.videoWidth > 0) {
             setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
           }
         } catch (e) {
-          console.warn('Initial video.play() err:', e);
+          addLog(`video.play() rejected: ${e}`);
         }
 
         video.onloadedmetadata = async () => {
@@ -157,19 +199,22 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             await video.play();
             if (video.videoWidth > 0) {
               setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
+              addLog(`Metadata loaded: ${video.videoWidth}x${video.videoHeight}`);
             }
           } catch (playErr) {
-            console.warn('video.play() onloadedmetadata err:', playErr);
+            addLog(`onloadedmetadata play error: ${playErr}`);
           }
         };
       }
 
       setIsActive(true);
       setIsStarting(false);
+      refreshDevices();
     } catch (err: unknown) {
       console.error('Camera access error:', err);
       const msg = err instanceof Error ? err.message : 'Camera access denied or unavailable.';
       setCameraError(msg);
+      addLog(`ERROR: ${msg}`);
       setIsActive(false);
       setIsStarting(false);
     }
@@ -181,8 +226,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       try {
         await video.play();
         setIsVideoPaused(false);
+        addLog('Resumed video playback');
       } catch (e) {
-        console.warn('Manual resume error:', e);
+        addLog(`Resume error: ${e}`);
       }
     }
   };
@@ -198,20 +244,27 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     setIsActive(false);
     setIsStarting(false);
     setIsVideoPaused(false);
+    setIsDemoMode(false);
     prevFrameDataRef.current = null;
     setFps(0);
     setZoneMotionLevels({});
     setCameraResolution('');
     setCameraDeviceLabel('');
+    addLog('Camera stopped');
   };
 
-  // Re-verify stream attachment when active
+  // Demo motion simulation
   useEffect(() => {
-    if (isActive && streamRef.current && videoRef.current && videoRef.current.srcObject !== streamRef.current) {
-      videoRef.current.srcObject = streamRef.current;
-      videoRef.current.play().catch(() => {});
-    }
-  }, [isActive]);
+    if (!isDemoMode) return;
+    let demoIdx = 0;
+    const demoOrder: DrumInstrumentId[] = ['hihat_closed', 'snare', 'hihat_closed', 'bass', 'crash', 'high_tom', 'mid_tom', 'floor_tom'];
+    const timer = setInterval(() => {
+      const target = demoOrder[demoIdx % demoOrder.length];
+      triggerStrike(target);
+      demoIdx++;
+    }, 450);
+    return () => clearInterval(timer);
+  }, [isDemoMode, triggerStrike]);
 
   // Clean up on unmount
   useEffect(() => {
@@ -262,8 +315,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         lastFpsCalcTime = now;
       }
 
-      // 2. Manage Canvas Transparency:
-      // When Camera is ACTIVE: The canvas is 100% TRANSPARENT so the video underneath is crystal clear!
+      // 2. Clear canvas when active so video shows through 100%
       if (isActive) {
         oCtx.clearRect(0, 0, w, h);
 
@@ -283,7 +335,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               const newMotionLevels: Record<string, number> = {};
 
               AIR_ZONES.forEach((zone) => {
-                // Invert x because video is CSS mirrored (scale-x-[-1])
                 const rawX = zone.xRatio;
                 const mirroredX = 1.0 - (rawX + zone.wRatio);
 
@@ -404,7 +455,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           oCtx.arc(cx, cy, radius, 0, Math.PI * 2);
           oCtx.stroke();
 
-          mCtx_arc:
           oCtx.beginPath();
           oCtx.arc(cx, cy, radius * 0.65, 0, Math.PI * 2);
           oCtx.stroke();
@@ -485,7 +535,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   return (
     <div className="w-full flex flex-col gap-1.5 rounded-xl bg-gradient-to-b from-slate-900 via-[#0e1628] to-[#070b14] border border-slate-800 p-2.5 shadow-xl">
       {/* Top Header */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+      <div className="flex items-center justify-between border-b border-slate-800 pb-1.5 flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <div className="p-1 rounded-lg bg-emerald-950 border border-emerald-500/30 text-emerald-400">
             <Camera className="w-4 h-4" />
@@ -497,6 +547,11 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                 <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
                   <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                   ● LIVE FEED {cameraResolution ? `(${cameraResolution})` : ''} • {fps} FPS
+                </span>
+              ) : isDemoMode ? (
+                <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 border border-purple-500/40 flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-purple-400 animate-pulse" />
+                  ● DEMO AUTO-TRACKING
                 </span>
               ) : (
                 <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
@@ -511,6 +566,24 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {/* Camera Selector Dropdown if multiple devices */}
+          {availableDevices.length > 1 && !isActive && (
+            <select
+              value={selectedDeviceId}
+              onChange={(e) => {
+                setSelectedDeviceId(e.target.value);
+                if (isActive) startCamera(e.target.value);
+              }}
+              className="bg-slate-900 border border-slate-700 text-slate-200 text-[10px] rounded px-1.5 py-1 font-mono-code max-w-[130px] truncate"
+            >
+              {availableDevices.map((d, i) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.label || `Camera ${i + 1}`}
+                </option>
+              ))}
+            </select>
+          )}
+
           {isActive ? (
             <button
               onClick={stopCamera}
@@ -521,7 +594,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </button>
           ) : (
             <button
-              onClick={startCamera}
+              onClick={() => startCamera()}
               disabled={isStarting}
               className="flex items-center gap-1 px-3 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all disabled:opacity-50"
             >
@@ -529,25 +602,70 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               <span>{isStarting ? 'STARTING...' : 'START CAMERA'}</span>
             </button>
           )}
+
+          {/* Diagnostic Toggle */}
+          <button
+            onClick={() => setShowDiagnostics((p) => !p)}
+            className={`p-1 rounded-lg border text-xs font-mono-code transition-colors ${
+              showDiagnostics ? 'bg-amber-950 border-amber-500 text-amber-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+            }`}
+            title="Toggle Live Camera Diagnostics"
+          >
+            <Info className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 
       {cameraError && (
-        <div className="p-2 rounded-lg bg-red-950/70 border border-red-500/50 text-red-200 text-[10px] font-mono-code flex items-start gap-1.5">
+        <div className="p-2 rounded-lg bg-red-950/80 border border-red-500 text-red-200 text-[10px] font-mono-code flex items-start gap-1.5">
           <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-          <div className="flex flex-col">
-            <strong className="text-red-300 font-bold">Camera Notice:</strong>
+          <div className="flex flex-col gap-0.5">
+            <strong className="text-red-300 font-bold">Camera Access Issue:</strong>
             <span>{cameraError}</span>
-            <span className="text-[9px] text-slate-400 mt-0.5">
-              💡 Tap or click any of the 8 skeleton zones below to play immediately!
-            </span>
+            <div className="flex items-center gap-2 mt-1">
+              <button
+                onClick={() => startCamera()}
+                className="px-2 py-0.5 rounded bg-red-800 hover:bg-red-700 text-white font-bold text-[9px]"
+              >
+                🔄 Retry Camera
+              </button>
+              <button
+                onClick={() => setIsDemoMode((p) => !p)}
+                className="px-2 py-0.5 rounded bg-purple-900 hover:bg-purple-800 text-purple-200 font-bold text-[9px]"
+              >
+                ✨ Try Demo Mode
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live Diagnostics Panel */}
+      {showDiagnostics && (
+        <div className="p-2 rounded-lg bg-black/90 border border-amber-500/40 text-[9px] font-mono-code text-amber-200 flex flex-col gap-1">
+          <div className="flex justify-between items-center border-b border-amber-500/20 pb-1">
+            <span className="font-bold text-amber-400">CAMERA & SENSOR DIAGNOSTICS</span>
+            <button onClick={() => setDiagnosticLogs([])} className="text-slate-400 hover:text-white">Clear</button>
+          </div>
+          <div className="grid grid-cols-2 gap-1 text-slate-300">
+            <div>HTTPS Context: <strong className={window.isSecureContext ? 'text-emerald-400' : 'text-red-400'}>{window.isSecureContext ? 'YES (Secure)' : 'NO (Insecure)'}</strong></div>
+            <div>MediaDevices API: <strong className={navigator.mediaDevices ? 'text-emerald-400' : 'text-red-400'}>{navigator.mediaDevices ? 'AVAILABLE' : 'UNAVAILABLE'}</strong></div>
+            <div>Active State: <strong className="text-white">{isActive ? 'ACTIVE' : 'IDLE'}</strong></div>
+            <div>Video Res: <strong className="text-white">{cameraResolution || '0x0'}</strong></div>
+          </div>
+          <div className="max-h-20 overflow-y-auto bg-slate-950/80 p-1 rounded border border-slate-800 flex flex-col gap-0.5 text-slate-400">
+            {diagnosticLogs.length === 0 ? (
+              <span>No logs yet. Click "START CAMERA" to record events.</span>
+            ) : (
+              diagnosticLogs.map((l, i) => <div key={i}>{l}</div>)
+            )}
           </div>
         </div>
       )}
 
       {/* Main Viewport: Native Video Layer (Bottom) + Transparent Skeleton Canvas Layer (Top) */}
       <div className="relative w-full aspect-[16/9] max-h-[225px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
-        {/* 1. Real Native HTML5 Video Element (Guaranteed Browser Display) */}
+        {/* 1. Real Native HTML5 Video Element */}
         <video
           ref={videoRef}
           autoPlay
