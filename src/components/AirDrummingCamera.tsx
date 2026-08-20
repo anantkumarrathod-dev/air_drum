@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Hand, Handedness, DrumInstrumentId } from '../types/drum';
 import { getInstrumentHand } from '../data/beatLibrary';
-import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, RefreshCw } from 'lucide-react';
+import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, RefreshCw, CheckCircle2 } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
@@ -49,6 +49,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [fps, setFps] = useState<number>(0);
   const [cameraResolution, setCameraResolution] = useState<string>('');
+  const [cameraDeviceLabel, setCameraDeviceLabel] = useState<string>('');
 
   // Per-zone motion levels & flash states
   const [zoneMotionLevels, setZoneMotionLevels] = useState<Record<string, number>>({});
@@ -56,7 +57,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [zoneHitCounts, setZoneHitCounts] = useState<Record<string, number>>({});
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const mainCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const procCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -120,10 +121,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       }
 
       if (!stream) {
-        throw new Error('Unable to access webcam. Please allow camera permissions in your browser.');
+        throw new Error('Unable to access camera. Please allow camera permissions in your browser address bar.');
       }
 
       streamRef.current = stream;
+
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        setCameraDeviceLabel(videoTrack.label || 'Webcam');
+      }
 
       const video = videoRef.current;
       if (video) {
@@ -139,16 +145,16 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                 setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
               }
             } catch (e) {
-              console.warn('Video play auto-resume error:', e);
+              console.warn('video.play() auto-resume:', e);
             }
             resolve();
           };
 
-          // Fallback
+          // Timeout fallback
           setTimeout(async () => {
             try {
-              await video.play();
-              if (video.videoWidth > 0) {
+              await video?.play();
+              if (video && video.videoWidth > 0) {
                 setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
               }
             } catch {}
@@ -182,9 +188,18 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     setFps(0);
     setZoneMotionLevels({});
     setCameraResolution('');
+    setCameraDeviceLabel('');
   };
 
-  // Clean up stream on unmount
+  // Re-verify stream attachment when active
+  useEffect(() => {
+    if (isActive && streamRef.current && videoRef.current && videoRef.current.srcObject !== streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [isActive]);
+
+  // Clean up on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
@@ -207,22 +222,22 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
     const renderAndDetect = () => {
       const video = videoRef.current;
-      const mainCanvas = mainCanvasRef.current;
+      const overlayCanvas = overlayCanvasRef.current;
       const procCanvas = procCanvasRef.current;
 
-      if (!mainCanvas || !procCanvas) {
+      if (!overlayCanvas || !procCanvas) {
         animId = requestAnimationFrame(renderAndDetect);
         return;
       }
 
-      const mCtx = mainCanvas.getContext('2d');
-      if (!mCtx) {
+      const oCtx = overlayCanvas.getContext('2d');
+      if (!oCtx) {
         animId = requestAnimationFrame(renderAndDetect);
         return;
       }
 
-      const w = mainCanvas.width;
-      const h = mainCanvas.height;
+      const w = overlayCanvas.width;
+      const h = overlayCanvas.height;
 
       // 1. Calculate FPS
       frameCount++;
@@ -233,17 +248,10 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         lastFpsCalcTime = now;
       }
 
-      // 2. Background: Live Mirrored Video or Studio Skeleton Stage
+      // 2. Optical Flow Processing (When Video is Ready)
       const isVideoReady = isActive && video && video.readyState >= 2 && video.videoWidth > 0;
 
       if (isVideoReady && video) {
-        mCtx.save();
-        mCtx.translate(w, 0);
-        mCtx.scale(-1, 1);
-        mCtx.drawImage(video, 0, 0, w, h);
-        mCtx.restore();
-
-        // 3. Process Optical Flow
         const pCtx = procCanvas.getContext('2d', { willReadFrequently: true });
         if (pCtx) {
           pCtx.drawImage(video, 0, 0, 160, 120);
@@ -258,8 +266,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             const newMotionLevels: Record<string, number> = {};
 
             AIR_ZONES.forEach((zone) => {
-              const minX = Math.floor(zone.xRatio * 160);
-              const maxX = Math.floor((zone.xRatio + zone.wRatio) * 160);
+              // Note: Video is mirrored horizontally in CSS (scale-x-[-1]), so we invert the x sampling range
+              const rawX = zone.xRatio;
+              const mirroredX = 1.0 - (rawX + zone.wRatio);
+
+              const minX = Math.floor(mirroredX * 160);
+              const maxX = Math.floor((mirroredX + zone.wRatio) * 160);
               const minY = Math.floor(zone.yRatio * 120);
               const maxY = Math.floor((zone.yRatio + zone.hRatio) * 120);
 
@@ -291,32 +303,35 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
           prevFrameDataRef.current = new Uint8ClampedArray(data);
         }
+
+        // Clear canvas for transparent overlay on top of video
+        oCtx.clearRect(0, 0, w, h);
       } else {
-        // Studio Stage Grid
-        const bgGrad = mCtx.createLinearGradient(0, 0, 0, h);
+        // When Camera is Offline: Render Studio Grid Background
+        const bgGrad = oCtx.createLinearGradient(0, 0, 0, h);
         bgGrad.addColorStop(0, '#0a1020');
         bgGrad.addColorStop(0.5, '#070b16');
         bgGrad.addColorStop(1, '#03050a');
-        mCtx.fillStyle = bgGrad;
-        mCtx.fillRect(0, 0, w, h);
+        oCtx.fillStyle = bgGrad;
+        oCtx.fillRect(0, 0, w, h);
 
-        mCtx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
-        mCtx.lineWidth = 1;
+        oCtx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+        oCtx.lineWidth = 1;
         for (let gx = 0; gx < w; gx += 40) {
-          mCtx.beginPath();
-          mCtx.moveTo(gx, 0);
-          mCtx.lineTo(gx, h);
-          mCtx.stroke();
+          oCtx.beginPath();
+          oCtx.moveTo(gx, 0);
+          oCtx.lineTo(gx, h);
+          oCtx.stroke();
         }
         for (let gy = 0; gy < h; gy += 40) {
-          mCtx.beginPath();
-          mCtx.moveTo(0, gy);
-          mCtx.lineTo(w, gy);
-          mCtx.stroke();
+          oCtx.beginPath();
+          oCtx.moveTo(0, gy);
+          oCtx.lineTo(w, gy);
+          oCtx.stroke();
         }
       }
 
-      // 4. Render 8-Zone Skeleton Rig & AR Crosshairs
+      // 3. Render 8-Zone Skeleton Rig & AR Crosshairs onto Overlay Canvas
       AIR_ZONES.forEach((zone) => {
         const zx = Math.round(zone.xRatio * w);
         const zy = Math.round(zone.yRatio * h);
@@ -330,96 +345,96 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         const zoneColor = isRight ? '#FF6D00' : '#00E5FF';
         const isFlashing = zoneFlashes[zone.id];
 
-        mCtx.save();
+        oCtx.save();
 
-        // 4A. Zone Bounding Box
-        mCtx.strokeStyle = isFlashing ? '#FFFFFF' : isVideoReady ? zoneColor : `${zoneColor}99`;
-        mCtx.lineWidth = isFlashing ? 5 : 2;
-        mCtx.fillStyle = isFlashing
+        // 3A. Zone Bounding Box
+        oCtx.strokeStyle = isFlashing ? '#FFFFFF' : isVideoReady ? zoneColor : `${zoneColor}99`;
+        oCtx.lineWidth = isFlashing ? 5 : 2;
+        oCtx.fillStyle = isFlashing
           ? `${zoneColor}88`
           : isVideoReady
           ? `${zoneColor}1F`
           : `${zoneColor}14`;
 
-        mCtx.beginPath();
-        mCtx.roundRect(zx, zy, zw, zh, 12);
-        mCtx.fill();
-        mCtx.stroke();
+        oCtx.beginPath();
+        oCtx.roundRect(zx, zy, zw, zh, 12);
+        oCtx.fill();
+        oCtx.stroke();
 
-        // 4B. AR Corner Brackets
+        // 3B. AR Corner Brackets
         const cLen = 12;
-        mCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
-        mCtx.lineWidth = 3;
-        mCtx.beginPath();
-        mCtx.moveTo(zx, zy + cLen);
-        mCtx.lineTo(zx, zy);
-        mCtx.lineTo(zx + cLen, zy);
-        mCtx.moveTo(zx + zw - cLen, zy);
-        mCtx.lineTo(zx + zw, zy);
-        mCtx.lineTo(zx + zw, zy + cLen);
-        mCtx.moveTo(zx, zy + zh - cLen);
-        mCtx.lineTo(zx, zy + zh);
-        mCtx.lineTo(zx + cLen, zy + zh);
-        mCtx.moveTo(zx + zw - cLen, zy + zh);
-        mCtx.lineTo(zx + zw, zy + zh);
-        mCtx.lineTo(zx + zw, zy + zh - cLen);
-        mCtx.stroke();
+        oCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
+        oCtx.lineWidth = 3;
+        oCtx.beginPath();
+        oCtx.moveTo(zx, zy + cLen);
+        oCtx.lineTo(zx, zy);
+        oCtx.lineTo(zx + cLen, zy);
+        oCtx.moveTo(zx + zw - cLen, zy);
+        oCtx.lineTo(zx + zw, zy);
+        oCtx.lineTo(zx + zw, zy + cLen);
+        oCtx.moveTo(zx, zy + zh - cLen);
+        oCtx.lineTo(zx, zy + zh);
+        oCtx.lineTo(zx + cLen, zy + zh);
+        oCtx.moveTo(zx + zw - cLen, zy + zh);
+        oCtx.lineTo(zx + zw, zy + zh);
+        oCtx.lineTo(zx + zw, zy + zh - cLen);
+        oCtx.stroke();
 
-        // 4C. Drum/Cymbal Wireframe Graphic
+        // 3C. Drum/Cymbal Wireframe Graphic
         const radius = Math.min(zw, zh) * 0.32;
         if (zone.type === 'cymbal') {
-          mCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
-          mCtx.lineWidth = 1.5;
-          mCtx.beginPath();
-          mCtx.arc(cx, cy, radius, 0, Math.PI * 2);
-          mCtx.stroke();
+          oCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
+          oCtx.lineWidth = 1.5;
+          oCtx.beginPath();
+          oCtx.arc(cx, cy, radius, 0, Math.PI * 2);
+          oCtx.stroke();
 
-          mCtx.beginPath();
-          mCtx.arc(cx, cy, radius * 0.65, 0, Math.PI * 2);
-          mCtx.stroke();
+          oCtx.beginPath();
+          oCtx.arc(cx, cy, radius * 0.65, 0, Math.PI * 2);
+          oCtx.stroke();
 
-          mCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
-          mCtx.beginPath();
-          mCtx.arc(cx, cy, radius * 0.28, 0, Math.PI * 2);
-          mCtx.fill();
+          oCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
+          oCtx.beginPath();
+          oCtx.arc(cx, cy, radius * 0.28, 0, Math.PI * 2);
+          oCtx.fill();
         } else {
-          mCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
-          mCtx.lineWidth = 2;
-          mCtx.beginPath();
-          mCtx.arc(cx, cy, radius, 0, Math.PI * 2);
-          mCtx.stroke();
+          oCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
+          oCtx.lineWidth = 2;
+          oCtx.beginPath();
+          oCtx.arc(cx, cy, radius, 0, Math.PI * 2);
+          oCtx.stroke();
 
-          mCtx.strokeStyle = `${zoneColor}44`;
-          mCtx.lineWidth = 1;
-          mCtx.beginPath();
-          mCtx.arc(cx, cy, radius * 0.75, 0, Math.PI * 2);
-          mCtx.stroke();
+          oCtx.strokeStyle = `${zoneColor}44`;
+          oCtx.lineWidth = 1;
+          oCtx.beginPath();
+          oCtx.arc(cx, cy, radius * 0.75, 0, Math.PI * 2);
+          oCtx.stroke();
 
-          mCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
-          mCtx.lineWidth = 1.5;
-          mCtx.beginPath();
-          mCtx.moveTo(cx - radius * 0.4, cy);
-          mCtx.lineTo(cx + radius * 0.4, cy);
-          mCtx.moveTo(cx, cy - radius * 0.4);
-          mCtx.lineTo(cx, cy + radius * 0.4);
-          mCtx.stroke();
+          oCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
+          oCtx.lineWidth = 1.5;
+          oCtx.beginPath();
+          oCtx.moveTo(cx - radius * 0.4, cy);
+          oCtx.lineTo(cx + radius * 0.4, cy);
+          oCtx.moveTo(cx, cy - radius * 0.4);
+          oCtx.lineTo(cx, cy + radius * 0.4);
+          oCtx.stroke();
 
-          mCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
-          mCtx.beginPath();
-          mCtx.arc(cx, cy, radius * 0.22, 0, Math.PI * 2);
-          mCtx.fill();
+          oCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
+          oCtx.beginPath();
+          oCtx.arc(cx, cy, radius * 0.22, 0, Math.PI * 2);
+          oCtx.fill();
         }
 
-        // 4D. Labels
-        mCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
-        mCtx.font = 'bold 11px "Montserrat", sans-serif';
-        mCtx.fillText(zone.shortName, zx + 8, zy + 16);
+        // 3D. Labels
+        oCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
+        oCtx.font = 'bold 11px "Montserrat", sans-serif';
+        oCtx.fillText(zone.shortName, zx + 8, zy + 16);
 
-        mCtx.fillStyle = '#FFFFFF';
-        mCtx.font = '10px monospace';
-        mCtx.fillText(isRight ? 'RH [J/K]' : 'LH [D/F]', zx + 8, zy + 30);
+        oCtx.fillStyle = '#FFFFFF';
+        oCtx.font = '10px monospace';
+        oCtx.fillText(isRight ? 'RH [J/K]' : 'LH [D/F]', zx + 8, zy + 30);
 
-        mCtx.restore();
+        oCtx.restore();
       });
 
       animId = requestAnimationFrame(renderAndDetect);
@@ -433,8 +448,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   }, [isActive, sensitivity, trackingMode, triggerStrike, zoneFlashes, handedness, invertHands]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!mainCanvasRef.current) return;
-    const rect = mainCanvasRef.current.getBoundingClientRect();
+    if (!overlayCanvasRef.current) return;
+    const rect = overlayCanvasRef.current.getBoundingClientRect();
     const clickXRatio = (e.clientX - rect.left) / rect.width;
     const clickYRatio = (e.clientY - rect.top) / rect.height;
 
@@ -453,22 +468,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
   return (
     <div className="w-full flex flex-col gap-1.5 rounded-xl bg-gradient-to-b from-slate-900 via-[#0e1628] to-[#070b14] border border-slate-800 p-2.5 shadow-xl">
-      {/* Hidden Real HTML Video Tag in DOM Tree so browser decodes frames */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        style={{
-          position: 'absolute',
-          width: '1px',
-          height: '1px',
-          opacity: 0.001,
-          pointerEvents: 'none',
-          zIndex: -999,
-        }}
-      />
-
       {/* Top Header */}
       <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
         <div className="flex items-center gap-2">
@@ -477,15 +476,20 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           </div>
           <div>
             <h3 className="font-display font-black text-xs sm:text-sm text-white flex items-center gap-2">
-              AIR DRUMMING • 8 DRUM SKELETON
-              {isActive && (
-                <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
-                  ● {fps} FPS {cameraResolution ? `• ${cameraResolution}` : ''}
+              AIR DRUMMING
+              {isActive ? (
+                <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                  ● LIVE FEED {cameraResolution ? `(${cameraResolution})` : ''} • {fps} FPS
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                  STANDBY (SKELETON READY)
                 </span>
               )}
             </h3>
             <p className="text-[10px] font-mono-code text-slate-400">
-              Interactive 8-zone spatial drum skeleton with motion tracking
+              {cameraDeviceLabel ? `Active: ${cameraDeviceLabel}` : 'Interactive 8-zone spatial drum skeleton with motion tracking'}
             </p>
           </div>
         </div>
@@ -494,19 +498,19 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           {isActive ? (
             <button
               onClick={stopCamera}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-500/40 text-xs font-mono-code font-bold transition-colors"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-500/40 text-xs font-mono-code font-bold transition-colors"
             >
-              <CameraOff className="w-3 h-3" />
+              <CameraOff className="w-3.5 h-3.5" />
               <span>Turn Off</span>
             </button>
           ) : (
             <button
               onClick={startCamera}
               disabled={isStarting}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all disabled:opacity-50"
+              className="flex items-center gap-1 px-3 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all disabled:opacity-50"
             >
-              {isStarting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Video className="w-3 h-3" />}
-              <span>{isStarting ? 'CONNECTING...' : 'START CAMERA'}</span>
+              {isStarting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Video className="w-3.5 h-3.5" />}
+              <span>{isStarting ? 'STARTING...' : 'START CAMERA'}</span>
             </button>
           )}
         </div>
@@ -525,19 +529,31 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         </div>
       )}
 
-      {/* Main Viewport: Canvas with responsive aspect ratio */}
-      <div className="relative w-full aspect-[16/9] max-h-[220px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
+      {/* Main Viewport: Native Video Layer (Bottom) + Transparent Skeleton Canvas Layer (Top) */}
+      <div className="relative w-full aspect-[16/9] max-h-[225px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
+        {/* 1. Real Native HTML5 Video Element (Guaranteed Browser Display) */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`absolute inset-0 w-full h-full object-cover transform scale-x-[-1] transition-opacity duration-300 ${
+            isActive ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          }`}
+        />
+
+        {/* 2. Transparent Interactive 8-Drum Skeleton Overlay Canvas */}
         <canvas
-          ref={mainCanvasRef}
+          ref={overlayCanvasRef}
           width={640}
           height={360}
           onClick={handleCanvasClick}
-          className="w-full h-full object-cover cursor-pointer select-none"
+          className="absolute inset-0 w-full h-full object-cover cursor-pointer select-none z-10"
           title="Click or strike any drum zone"
         />
 
         {/* Top Floating Guide */}
-        <div className="absolute top-1.5 left-1/2 -translate-x-1/2 pointer-events-none px-2.5 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-slate-700/80 flex items-center gap-2 text-[9px] font-mono-code text-slate-300 shadow-md">
+        <div className="absolute top-1.5 left-1/2 -translate-x-1/2 pointer-events-none px-2.5 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-slate-700/80 flex items-center gap-2 text-[9px] font-mono-code text-slate-300 shadow-md z-20">
           <span className="flex items-center gap-1 text-cyan-300">
             <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
             CYAN = LEFT HAND [D/F]
