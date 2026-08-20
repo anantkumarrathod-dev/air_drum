@@ -45,12 +45,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [isActive, setIsActive] = useState<boolean>(false);
   const [isStarting, setIsStarting] = useState<boolean>(false);
   const [trackingMode, setTrackingMode] = useState<'fingers' | 'sticks'>('fingers');
-  const [sensitivity, setSensitivity] = useState<number>(65); // High responsiveness
+  const [sensitivity, setSensitivity] = useState<number>(65);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [fps, setFps] = useState<number>(0);
   const [cameraResolution, setCameraResolution] = useState<string>('');
 
-  // Per-zone motion levels & flash states for all 8 drum parts
+  // Per-zone motion levels & flash states
   const [zoneMotionLevels, setZoneMotionLevels] = useState<Record<string, number>>({});
   const [zoneFlashes, setZoneFlashes] = useState<Record<string, boolean>>({});
   const [zoneHitCounts, setZoneHitCounts] = useState<Record<string, number>>({});
@@ -60,14 +60,13 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const procCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Optical flow / motion history
   const prevFrameDataRef = useRef<Uint8ClampedArray | null>(null);
   const lastZoneStrikeTimeRef = useRef<Record<string, number>>({});
 
   const triggerStrike = useCallback((instId: DrumInstrumentId) => {
     const now = performance.now();
     const lastTime = lastZoneStrikeTimeRef.current[instId] || 0;
-    if (now - lastTime < 160) return; // 160ms debounce
+    if (now - lastTime < 160) return;
     lastZoneStrikeTimeRef.current[instId] = now;
 
     const assignedHand = getInstrumentHand(instId, handedness, invertHands);
@@ -90,7 +89,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         throw new Error('Camera API requires HTTPS or a supported browser.');
       }
 
-      // 1. Acquire Camera Stream with progressive fallback
+      // Progressive constraint fallback
       let stream: MediaStream | null = null;
       const constraintsList: MediaStreamConstraints[] = [
         {
@@ -116,57 +115,47 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           stream = await navigator.mediaDevices.getUserMedia(constraints);
           if (stream) break;
         } catch {
-          // Try next fallback
+          // Try next
         }
       }
 
       if (!stream) {
-        throw new Error('Unable to start camera. Please verify camera permissions in your browser.');
+        throw new Error('Unable to access webcam. Please allow camera permissions in your browser.');
       }
 
       streamRef.current = stream;
 
-      // 2. Attach Stream to Hidden Video Element
-      let video = videoRef.current;
-      if (!video) {
-        video = document.createElement('video');
-        video.setAttribute('playsinline', 'true');
-        video.setAttribute('webkit-playsinline', 'true');
+      const video = videoRef.current;
+      if (video) {
+        video.srcObject = stream;
         video.muted = true;
-        video.autoplay = true;
-        videoRef.current = video;
+        video.playsInline = true;
+
+        await new Promise<void>((resolve) => {
+          video.onloadedmetadata = async () => {
+            try {
+              await video.play();
+              if (video.videoWidth > 0) {
+                setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
+              }
+            } catch (e) {
+              console.warn('Video play auto-resume error:', e);
+            }
+            resolve();
+          };
+
+          // Fallback
+          setTimeout(async () => {
+            try {
+              await video.play();
+              if (video.videoWidth > 0) {
+                setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
+              }
+            } catch {}
+            resolve();
+          }, 600);
+        });
       }
-
-      video.srcObject = stream;
-      video.muted = true;
-      video.playsInline = true;
-
-      // Wait for video to begin receiving frames
-      await new Promise<void>((resolve) => {
-        if (!video) return resolve();
-        video.onloadedmetadata = async () => {
-          try {
-            await video?.play();
-            if (video) {
-              setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
-            }
-          } catch (e) {
-            console.warn('Video play error:', e);
-          }
-          resolve();
-        };
-
-        // Fallback timeout
-        setTimeout(async () => {
-          try {
-            await video?.play();
-            if (video && video.videoWidth > 0) {
-              setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
-            }
-          } catch {}
-          resolve();
-        }, 500);
-      });
 
       setIsActive(true);
       setIsStarting(false);
@@ -195,7 +184,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     setCameraResolution('');
   };
 
-  // Clean up on unmount
+  // Clean up stream on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
@@ -204,7 +193,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     };
   }, []);
 
-  // Main Unified Canvas Render & 8-Zone Skeleton Loop (Runs ALWAYS)
+  // Main Canvas Render & Motion Detection Loop (Always Active)
   useEffect(() => {
     let animId: number;
     let frameCount = 0;
@@ -244,7 +233,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         lastFpsCalcTime = now;
       }
 
-      // 2. Draw Background: Live Mirrored Video OR Studio Drum Skeleton Grid
+      // 2. Background: Live Mirrored Video or Studio Skeleton Stage
       const isVideoReady = isActive && video && video.readyState >= 2 && video.videoWidth > 0;
 
       if (isVideoReady && video) {
@@ -254,7 +243,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         mCtx.drawImage(video, 0, 0, w, h);
         mCtx.restore();
 
-        // 3. Process Optical Flow across all 8 zones
+        // 3. Process Optical Flow
         const pCtx = procCanvas.getContext('2d', { willReadFrequently: true });
         if (pCtx) {
           pCtx.drawImage(video, 0, 0, 160, 120);
@@ -303,7 +292,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           prevFrameDataRef.current = new Uint8ClampedArray(data);
         }
       } else {
-        // Studio Skeleton Background when video is offline or loading
+        // Studio Stage Grid
         const bgGrad = mCtx.createLinearGradient(0, 0, 0, h);
         bgGrad.addColorStop(0, '#0a1020');
         bgGrad.addColorStop(0.5, '#070b16');
@@ -311,7 +300,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         mCtx.fillStyle = bgGrad;
         mCtx.fillRect(0, 0, w, h);
 
-        // Subtle studio stage grid lines
         mCtx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
         mCtx.lineWidth = 1;
         for (let gx = 0; gx < w; gx += 40) {
@@ -328,7 +316,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         }
       }
 
-      // 4. Render All 8 Color-Coded Drum Skeletons & Wireframes
+      // 4. Render 8-Zone Skeleton Rig & AR Crosshairs
       AIR_ZONES.forEach((zone) => {
         const zx = Math.round(zone.xRatio * w);
         const zy = Math.round(zone.yRatio * h);
@@ -344,7 +332,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
         mCtx.save();
 
-        // 4A. Outer Zone Bounding Box
+        // 4A. Zone Bounding Box
         mCtx.strokeStyle = isFlashing ? '#FFFFFF' : isVideoReady ? zoneColor : `${zoneColor}99`;
         mCtx.lineWidth = isFlashing ? 5 : 2;
         mCtx.fillStyle = isFlashing
@@ -358,39 +346,28 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         mCtx.fill();
         mCtx.stroke();
 
-        // 4B. AR Corner Crosshairs / Brackets
+        // 4B. AR Corner Brackets
         const cLen = 12;
         mCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
         mCtx.lineWidth = 3;
-        // Top-Left
         mCtx.beginPath();
         mCtx.moveTo(zx, zy + cLen);
         mCtx.lineTo(zx, zy);
         mCtx.lineTo(zx + cLen, zy);
-        mCtx.stroke();
-        // Top-Right
-        mCtx.beginPath();
         mCtx.moveTo(zx + zw - cLen, zy);
         mCtx.lineTo(zx + zw, zy);
         mCtx.lineTo(zx + zw, zy + cLen);
-        mCtx.stroke();
-        // Bottom-Left
-        mCtx.beginPath();
         mCtx.moveTo(zx, zy + zh - cLen);
         mCtx.lineTo(zx, zy + zh);
         mCtx.lineTo(zx + cLen, zy + zh);
-        mCtx.stroke();
-        // Bottom-Right
-        mCtx.beginPath();
         mCtx.moveTo(zx + zw - cLen, zy + zh);
         mCtx.lineTo(zx + zw, zy + zh);
         mCtx.lineTo(zx + zw, zy + zh - cLen);
         mCtx.stroke();
 
-        // 4C. Internal Drum/Cymbal Skeleton Wireframe Graphic
+        // 4C. Drum/Cymbal Wireframe Graphic
         const radius = Math.min(zw, zh) * 0.32;
         if (zone.type === 'cymbal') {
-          // Cymbal Skeleton: Concentric Lathed Rings & Bell
           mCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
           mCtx.lineWidth = 1.5;
           mCtx.beginPath();
@@ -401,27 +378,23 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           mCtx.arc(cx, cy, radius * 0.65, 0, Math.PI * 2);
           mCtx.stroke();
 
-          // Hammered Bell Center
           mCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
           mCtx.beginPath();
           mCtx.arc(cx, cy, radius * 0.28, 0, Math.PI * 2);
           mCtx.fill();
         } else {
-          // Drumhead Skeleton: Rim, Tuning Lugs & Center Strike Crosshairs
           mCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
           mCtx.lineWidth = 2;
           mCtx.beginPath();
           mCtx.arc(cx, cy, radius, 0, Math.PI * 2);
           mCtx.stroke();
 
-          // Inner Head Damping Ring
           mCtx.strokeStyle = `${zoneColor}44`;
           mCtx.lineWidth = 1;
           mCtx.beginPath();
           mCtx.arc(cx, cy, radius * 0.75, 0, Math.PI * 2);
           mCtx.stroke();
 
-          // Center Strike Dot & Crosshair
           mCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
           mCtx.lineWidth = 1.5;
           mCtx.beginPath();
@@ -437,12 +410,11 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           mCtx.fill();
         }
 
-        // 4D. Header Label
+        // 4D. Labels
         mCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
         mCtx.font = 'bold 11px "Montserrat", sans-serif';
         mCtx.fillText(zone.shortName, zx + 8, zy + 16);
 
-        // 4E. Hand & Trigger Tag
         mCtx.fillStyle = '#FFFFFF';
         mCtx.font = '10px monospace';
         mCtx.fillText(isRight ? 'RH [J/K]' : 'LH [D/F]', zx + 8, zy + 30);
@@ -460,7 +432,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     };
   }, [isActive, sensitivity, trackingMode, triggerStrike, zoneFlashes, handedness, invertHands]);
 
-  // Direct canvas click handler to find which zone was clicked
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!mainCanvasRef.current) return;
     const rect = mainCanvasRef.current.getBoundingClientRect();
@@ -481,9 +452,25 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded-xl bg-gradient-to-b from-slate-900 via-[#0e1628] to-[#070b14] border border-slate-800 p-3 shadow-xl overflow-hidden">
+    <div className="w-full flex flex-col gap-1.5 rounded-xl bg-gradient-to-b from-slate-900 via-[#0e1628] to-[#070b14] border border-slate-800 p-2.5 shadow-xl">
+      {/* Hidden Real HTML Video Tag in DOM Tree so browser decodes frames */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        style={{
+          position: 'absolute',
+          width: '1px',
+          height: '1px',
+          opacity: 0.001,
+          pointerEvents: 'none',
+          zIndex: -999,
+        }}
+      />
+
       {/* Top Header */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+      <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
         <div className="flex items-center gap-2">
           <div className="p-1 rounded-lg bg-emerald-950 border border-emerald-500/30 text-emerald-400">
             <Camera className="w-4 h-4" />
@@ -498,7 +485,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               )}
             </h3>
             <p className="text-[10px] font-mono-code text-slate-400">
-              Interactive 8-zone spatial drum skeleton with stick & finger motion tracking
+              Interactive 8-zone spatial drum skeleton with motion tracking
             </p>
           </div>
         </div>
@@ -507,40 +494,39 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           {isActive ? (
             <button
               onClick={stopCamera}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-500/40 text-xs font-mono-code font-bold transition-colors"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-500/40 text-xs font-mono-code font-bold transition-colors"
             >
-              <CameraOff className="w-3.5 h-3.5" />
+              <CameraOff className="w-3 h-3" />
               <span>Turn Off</span>
             </button>
           ) : (
             <button
               onClick={startCamera}
               disabled={isStarting}
-              className="flex items-center gap-1 px-3 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all disabled:opacity-50"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all disabled:opacity-50"
             >
-              {isStarting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Video className="w-3.5 h-3.5" />}
-              <span>{isStarting ? 'CONNECTING CAMERA...' : 'START CAMERA FEED'}</span>
+              {isStarting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Video className="w-3 h-3" />}
+              <span>{isStarting ? 'CONNECTING...' : 'START CAMERA'}</span>
             </button>
           )}
         </div>
       </div>
 
       {cameraError && (
-        <div className="p-2.5 rounded-lg bg-red-950/70 border border-red-500/50 text-red-200 text-[11px] font-mono-code flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-          <div className="flex flex-col gap-0.5">
-            <strong className="text-red-300 font-bold">Camera Permission Notice:</strong>
+        <div className="p-2 rounded-lg bg-red-950/70 border border-red-500/50 text-red-200 text-[10px] font-mono-code flex items-start gap-1.5">
+          <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+          <div className="flex flex-col">
+            <strong className="text-red-300 font-bold">Camera Notice:</strong>
             <span>{cameraError}</span>
-            <span className="text-[10px] text-slate-400 mt-1">
-              💡 You can still play the entire 8-zone Drum Skeleton by tapping/clicking anywhere on the canvas or using the buttons below!
+            <span className="text-[9px] text-slate-400 mt-0.5">
+              💡 Tap or click any of the 8 skeleton zones below to play immediately!
             </span>
           </div>
         </div>
       )}
 
-      {/* Viewport: Direct Canvas Renderer with 8 Spatial Drum Skeletons */}
-      <div className="relative w-full aspect-[16/9] max-h-[255px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
-        {/* Main Canvas (Always Visible & Interactive) */}
+      {/* Main Viewport: Canvas with responsive aspect ratio */}
+      <div className="relative w-full aspect-[16/9] max-h-[220px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
         <canvas
           ref={mainCanvasRef}
           width={640}
@@ -550,22 +536,22 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           title="Click or strike any drum zone"
         />
 
-        {/* Top Floating Guide Banner */}
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none px-3 py-1 rounded-full bg-black/70 backdrop-blur-md border border-slate-700/80 flex items-center gap-2 text-[10px] font-mono-code text-slate-300 shadow-md">
+        {/* Top Floating Guide */}
+        <div className="absolute top-1.5 left-1/2 -translate-x-1/2 pointer-events-none px-2.5 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-slate-700/80 flex items-center gap-2 text-[9px] font-mono-code text-slate-300 shadow-md">
           <span className="flex items-center gap-1 text-cyan-300">
-            <span className="w-2 h-2 rounded-full bg-cyan-400" />
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
             CYAN = LEFT HAND [D/F]
           </span>
           <span className="text-slate-500">•</span>
           <span className="flex items-center gap-1 text-orange-300">
-            <span className="w-2 h-2 rounded-full bg-orange-500" />
+            <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
             ORANGE = RIGHT HAND [J/K]
           </span>
         </div>
       </div>
 
-      {/* 8 Drum Part Live Status Grid */}
-      <div className="grid grid-cols-4 sm:grid-cols-8 gap-1 text-[10px] font-mono-code">
+      {/* 8 Drum Part Live Status Buttons */}
+      <div className="grid grid-cols-4 sm:grid-cols-8 gap-1 text-[9px] font-mono-code">
         {AIR_ZONES.map((zone) => {
           const assignedHand = getInstrumentHand(zone.id, handedness, invertHands);
           const isRight = assignedHand === 'RIGHT';
@@ -577,9 +563,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             <button
               key={zone.id}
               onClick={() => triggerStrike(zone.id)}
-              className={`flex flex-col items-center justify-between p-1.5 rounded-lg border transition-all active:scale-95 ${
+              className={`flex flex-col items-center justify-between p-1 rounded-lg border transition-all active:scale-95 ${
                 isFlashing
-                  ? 'bg-white text-black border-white shadow-[0_0_12px_#FFF]'
+                  ? 'bg-white text-black border-white shadow-[0_0_10px_#FFF]'
                   : isRight
                   ? 'bg-orange-950/40 border-orange-500/50 text-orange-200 hover:border-orange-400'
                   : 'bg-cyan-950/40 border-cyan-500/50 text-cyan-200 hover:border-cyan-400'
@@ -593,19 +579,19 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                   style={{ width: `${Math.min(100, motion)}%` }}
                 />
               </div>
-              <span className="text-[9px] opacity-75">{hitCount > 0 ? `${hitCount} hits` : (isRight ? 'RH' : 'LH')}</span>
+              <span className="text-[8px] opacity-75">{hitCount > 0 ? `${hitCount} hits` : (isRight ? 'RH' : 'LH')}</span>
             </button>
           );
         })}
       </div>
 
-      {/* Controls: Mode & Sensitivity Presets */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-950/80 p-2 rounded-lg border border-slate-800 text-xs">
-        {/* Tracking Mode Switcher */}
-        <div className="flex flex-col gap-1">
-          <span className="font-mono-code font-bold text-slate-300 flex items-center gap-1 text-[11px]">
+      {/* Mode & Sensitivity Controls */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 bg-slate-950/80 p-1.5 rounded-lg border border-slate-800 text-xs">
+        {/* Tracking Mode */}
+        <div className="flex flex-col gap-0.5">
+          <span className="font-mono-code font-bold text-slate-300 flex items-center gap-1 text-[10px]">
             <HandIcon className="w-3 h-3 text-cyan-400" />
-            STRIKE TRACKING TYPE:
+            TRACKING TYPE:
           </span>
           <div className="flex items-center gap-1">
             <button
@@ -613,9 +599,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                 setTrackingMode('fingers');
                 setSensitivity(70);
               }}
-              className={`flex-1 py-1 rounded font-display font-bold text-[11px] transition-all ${
+              className={`flex-1 py-0.5 rounded font-display font-bold text-[10px] transition-all ${
                 trackingMode === 'fingers'
-                  ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-black shadow-[0_0_8px_#00E5FF]'
+                  ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-black shadow-[0_0_6px_#00E5FF]'
                   : 'bg-slate-800 text-slate-400 hover:text-white'
               }`}
             >
@@ -626,9 +612,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                 setTrackingMode('sticks');
                 setSensitivity(60);
               }}
-              className={`flex-1 py-1 rounded font-display font-bold text-[11px] transition-all ${
+              className={`flex-1 py-0.5 rounded font-display font-bold text-[10px] transition-all ${
                 trackingMode === 'sticks'
-                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-black shadow-[0_0_8px_#FF6D00]'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-black shadow-[0_0_6px_#FF6D00]'
                   : 'bg-slate-800 text-slate-400 hover:text-white'
               }`}
             >
@@ -637,12 +623,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           </div>
         </div>
 
-        {/* Motion Sensitivity Presets & Slider */}
-        <div className="flex flex-col gap-1">
-          <div className="flex justify-between font-mono-code text-slate-300 text-[11px]">
+        {/* Motion Sensitivity */}
+        <div className="flex flex-col gap-0.5">
+          <div className="flex justify-between font-mono-code text-slate-300 text-[10px]">
             <span className="flex items-center gap-1">
               <Sliders className="w-3 h-3 text-amber-400" />
-              MOTION SENSITIVITY:
+              SENSITIVITY:
             </span>
             <span className="text-cyan-400 font-bold">{sensitivity}%</span>
           </div>
@@ -652,9 +638,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             max="95"
             value={sensitivity}
             onChange={(e) => setSensitivity(Number(e.target.value))}
-            className="w-full accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+            className="w-full accent-cyan-400 cursor-pointer h-1 bg-slate-800 rounded-lg"
           />
-          <div className="flex justify-between text-[9px] font-mono-code text-slate-400">
+          <div className="flex justify-between text-[8px] font-mono-code text-slate-400">
             <button onClick={() => setSensitivity(45)} className="hover:text-white">Normal (45%)</button>
             <button onClick={() => setSensitivity(65)} className="hover:text-white font-bold text-amber-300">Responsive (65%)</button>
             <button onClick={() => setSensitivity(85)} className="hover:text-white">Ultra (85%)</button>
