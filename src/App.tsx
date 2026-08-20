@@ -813,9 +813,13 @@ export const App: React.FC = () => {
 
         {/* TAB 2: AIR DRUMMING MOTION SENSOR VIEWPORT */}
         {activeTab === 'camera' && (
-          <div className="w-full h-full flex flex-col justify-center max-w-3xl mx-auto overflow-hidden">
+          <div className="w-full h-full flex flex-col justify-center max-w-3xl mx-auto overflow-y-auto">
             <AirDrummingCamera
-              onAirStrike={evaluateUserStrike}
+              onAirStrike={(instrument, hand) => {
+                audioEngine.playInstrument(instrument, 1.0);
+                setActiveHits((prev) => [...prev.slice(-10), { instrument, hand, timestamp: Date.now() }]);
+                evaluateUserStrike(hand);
+              }}
               handedness={handedness}
               invertHands={invertHands}
             />

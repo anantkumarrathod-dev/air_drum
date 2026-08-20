@@ -1,515 +1,470 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Hand, Handedness } from '../types/drum';
-import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, Zap, AlertCircle } from 'lucide-react';
+import { DrumInstrumentId, Hand, Handedness } from '../types/drum';
+import { getInstrumentHand } from '../data/beatLibrary';
 
 interface AirDrummingCameraProps {
-  onAirStrike: (hand: Hand) => void;
+  onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
   handedness?: Handedness;
   invertHands?: boolean;
 }
+
+interface Zone {
+  id: DrumInstrumentId;
+  label: string;
+  type: 'cymbal' | 'drum';
+  x: number; // 0..1
+  y: number;
+  w: number;
+  h: number;
+}
+
+const ZONES: Zone[] = [
+  { id: 'crash',        label: 'CRASH',     type: 'cymbal', x: 0.02, y: 0.03, w: 0.22, h: 0.28 },
+  { id: 'high_tom',     label: 'HI TOM',    type: 'drum',   x: 0.26, y: 0.03, w: 0.22, h: 0.28 },
+  { id: 'mid_tom',      label: 'MID TOM',   type: 'drum',   x: 0.52, y: 0.03, w: 0.22, h: 0.28 },
+  { id: 'ride',         label: 'RIDE',      type: 'cymbal', x: 0.76, y: 0.03, w: 0.22, h: 0.28 },
+  { id: 'hihat_closed', label: 'HI-HAT',   type: 'cymbal', x: 0.02, y: 0.35, w: 0.22, h: 0.29 },
+  { id: 'snare',        label: 'SNARE',     type: 'drum',   x: 0.26, y: 0.35, w: 0.22, h: 0.29 },
+  { id: 'floor_tom',    label: 'FLOOR TOM', type: 'drum',   x: 0.76, y: 0.35, w: 0.22, h: 0.29 },
+  { id: 'bass',         label: 'BASS DRUM', type: 'drum',   x: 0.33, y: 0.67, w: 0.34, h: 0.30 },
+];
 
 export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   onAirStrike,
   handedness = 'RIGHT_HANDED',
   invertHands = false,
 }) => {
-  const [isActive, setIsActive] = useState<boolean>(false);
-  const [trackingMode, setTrackingMode] = useState<'fingers' | 'sticks'>('fingers');
-  const [sensitivity, setSensitivity] = useState<number>(40);
+  const [isActive, setIsActive] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [fps, setFps] = useState<number>(0);
-  const [leftMotionLevel, setLeftMotionLevel] = useState<number>(0);
-  const [rightMotionLevel, setRightMotionLevel] = useState<number>(0);
+  const [fps, setFps] = useState(0);
+  const [resolution, setResolution] = useState('');
+  const [deviceLabel, setDeviceLabel] = useState('');
+  const [isPaused, setIsPaused] = useState(false);
+  const [sensitivity, setSensitivity] = useState(65);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [showDiag, setShowDiag] = useState(false);
+  const [diagLogs, setDiagLogs] = useState<string[]>([]);
+  const [flashes, setFlashes] = useState<Record<string, boolean>>({});
+  const [hits, setHits] = useState<Record<string, number>>({});
+  const [motions, setMotions] = useState<Record<string, number>>({});
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const procCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const procRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
+  const lastHitRef = useRef<Record<string, number>>({});
 
-  // Determine drum assignments for Left & Right zones
-  const isFloorBassRight = handedness === 'RIGHT_HANDED' ? !invertHands : invertHands;
-
-  const leftZoneConfig = {
-    color: isFloorBassRight ? '#00E5FF' : '#FF6D00',
-    colorName: isFloorBassRight ? 'CYAN' : 'ORANGE',
-    bgClass: isFloorBassRight ? 'bg-cyan-950/40 border-cyan-500/50 text-cyan-200' : 'bg-orange-950/40 border-orange-500/50 text-orange-200',
-    barColorClass: isFloorBassRight ? 'bg-cyan-400' : 'bg-orange-500',
-    textAccentClass: isFloorBassRight ? 'text-cyan-300' : 'text-orange-300',
-    drumParts: isFloorBassRight ? 'SNARE • HI-HAT • CYMBALS • TOMS' : 'FLOOR TOM • BASS DRUM (KICK)',
-    shortDrums: isFloorBassRight ? ['SNARE', 'HI-HAT', 'CYMBALS', 'TOMS'] : ['FLOOR TOM', 'BASS DRUM'],
+  const log = (msg: string) => {
+    const t = new Date().toLocaleTimeString();
+    setDiagLogs(prev => [`[${t}] ${msg}`, ...prev.slice(0, 19)]);
   };
 
-  const rightZoneConfig = {
-    color: isFloorBassRight ? '#FF6D00' : '#00E5FF',
-    colorName: isFloorBassRight ? 'ORANGE' : 'CYAN',
-    bgClass: isFloorBassRight ? 'bg-orange-950/40 border-orange-500/50 text-orange-200' : 'bg-cyan-950/40 border-cyan-500/50 text-cyan-200',
-    barColorClass: isFloorBassRight ? 'bg-orange-500' : 'bg-cyan-400',
-    textAccentClass: isFloorBassRight ? 'text-orange-300' : 'text-cyan-300',
-    drumParts: isFloorBassRight ? 'FLOOR TOM • BASS DRUM (KICK)' : 'SNARE • HI-HAT • CYMBALS • TOMS',
-    shortDrums: isFloorBassRight ? ['FLOOR TOM', 'BASS DRUM'] : ['SNARE', 'HI-HAT', 'CYMBALS', 'TOMS'],
-  };
-
-  // Optical flow / motion history
-  const prevFrameDataRef = useRef<Uint8ClampedArray | null>(null);
-  const lastStrikeTimeRef = useRef<{ LEFT: number; RIGHT: number }>({ LEFT: 0, RIGHT: 0 });
-  const [activeZoneFlash, setActiveZoneFlash] = useState<{ LEFT: boolean; RIGHT: boolean }>({ LEFT: false, RIGHT: false });
-
-  const triggerStrike = useCallback((hand: Hand) => {
+  const fireStrike = useCallback((id: DrumInstrumentId) => {
     const now = performance.now();
-    if (now - lastStrikeTimeRef.current[hand] < 180) return; // 180ms debounce
-    lastStrikeTimeRef.current[hand] = now;
+    if (now - (lastHitRef.current[id] || 0) < 180) return;
+    lastHitRef.current[id] = now;
+    const hand = getInstrumentHand(id, handedness, invertHands);
+    setHits(p => ({ ...p, [id]: (p[id] || 0) + 1 }));
+    setFlashes(p => ({ ...p, [id]: true }));
+    setTimeout(() => setFlashes(p => ({ ...p, [id]: false })), 200);
+    onAirStrike(id, hand);
+  }, [onAirStrike, handedness, invertHands]);
 
-    setActiveZoneFlash((prev) => ({ ...prev, [hand]: true }));
-    setTimeout(() => {
-      setActiveZoneFlash((prev) => ({ ...prev, [hand]: false }));
-    }, 180);
-
-    onAirStrike(hand);
-  }, [onAirStrike]);
+  // Demo mode auto-cycle
+  useEffect(() => {
+    if (!isDemoMode) return;
+    const seq: DrumInstrumentId[] = ['hihat_closed','snare','hihat_closed','bass','crash','high_tom','mid_tom','floor_tom'];
+    let i = 0;
+    const t = setInterval(() => { fireStrike(seq[i++ % seq.length]); }, 420);
+    return () => clearInterval(t);
+  }, [isDemoMode, fireStrike]);
 
   const startCamera = async () => {
-    try {
-      setCameraError(null);
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera access is not supported on this device/browser.');
-      }
+    setCameraError(null);
+    setIsStarting(true);
+    setIsDemoMode(false);
+    log('Requesting camera access...');
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-        },
-        audio: false,
-      });
-
-      streamRef.current = stream;
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.muted = true;
-        videoRef.current.playsInline = true;
-        await videoRef.current.play();
-      }
-      setIsActive(true);
-    } catch (err: unknown) {
-      console.error('Camera access error:', err);
-      const msg = err instanceof Error ? err.message : 'Camera access denied or unavailable.';
-      setCameraError(msg);
-      setIsActive(false);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      const msg = 'Camera API not available (requires HTTPS or localhost).';
+      setCameraError(msg); log('ERROR: ' + msg); setIsStarting(false); return;
     }
+
+    const attempts: MediaStreamConstraints[] = [
+      { video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false },
+      { video: { facingMode: 'user' }, audio: false },
+      { video: true, audio: false },
+    ];
+
+    let stream: MediaStream | null = null;
+    for (const c of attempts) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(c);
+        log('Camera acquired: ' + JSON.stringify(c.video));
+        break;
+      } catch (e: unknown) {
+        log('Attempt failed: ' + (e instanceof Error ? e.message : String(e)));
+      }
+    }
+
+    if (!stream) {
+      const msg = 'Camera blocked. Check Windows Settings → Privacy → Camera, or close Zoom/Teams.';
+      setCameraError(msg); log('ERROR: ' + msg); setIsStarting(false); return;
+    }
+
+    streamRef.current = stream;
+    const track = stream.getVideoTracks()[0];
+    if (track) { setDeviceLabel(track.label || 'Camera'); log('Track: ' + track.label); }
+
+    const video = videoRef.current;
+    if (video) {
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+      video.onpause = () => setIsPaused(true);
+      video.onplay  = () => setIsPaused(false);
+      video.onloadedmetadata = () => {
+        video.play().then(() => {
+          setResolution(`${video.videoWidth}x${video.videoHeight}`);
+          log(`Feed: ${video.videoWidth}x${video.videoHeight}`);
+        }).catch(e => log('play() error: ' + e));
+      };
+      try { await video.play(); } catch (_) { /* onloadedmetadata will handle */ }
+    }
+
+    setIsActive(true);
+    setIsStarting(false);
   };
 
   const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    setIsActive(false);
-    prevFrameDataRef.current = null;
-    setFps(0);
-    setLeftMotionLevel(0);
-    setRightMotionLevel(0);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setIsActive(false); setIsStarting(false); setIsPaused(false);
+    setIsDemoMode(false); setFps(0); setResolution(''); setDeviceLabel('');
+    prevFrameRef.current = null;
+    log('Camera stopped.');
   };
 
-  // Motion processing loop
+  useEffect(() => () => { streamRef.current?.getTracks().forEach(t => t.stop()); }, []);
+
+  // Render loop: skeleton overlay + motion detection
   useEffect(() => {
-    if (!isActive) return;
-
-    let animId: number;
+    let raf: number;
     let frameCount = 0;
-    let lastFpsCalcTime = performance.now();
+    let fpsTimer = performance.now();
 
-    if (!procCanvasRef.current) {
-      procCanvasRef.current = document.createElement('canvas');
-      procCanvasRef.current.width = 160;
-      procCanvasRef.current.height = 120;
+    if (!procRef.current) {
+      procRef.current = document.createElement('canvas');
+      procRef.current.width = 160;
+      procRef.current.height = 90;
     }
 
-    const processMotion = () => {
-      const video = videoRef.current;
-      const overlayCanvas = overlayCanvasRef.current;
-      const procCanvas = procCanvasRef.current;
+    const loop = () => {
+      const canvas = overlayRef.current;
+      if (!canvas) { raf = requestAnimationFrame(loop); return; }
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { raf = requestAnimationFrame(loop); return; }
+      const W = canvas.width, H = canvas.height;
 
-      if (!video || !overlayCanvas || !procCanvas || video.readyState < 2) {
-        animId = requestAnimationFrame(processMotion);
-        return;
-      }
-
+      // FPS counter
       frameCount++;
       const now = performance.now();
-      if (now - lastFpsCalcTime >= 1000) {
-        setFps(frameCount);
-        frameCount = 0;
-        lastFpsCalcTime = now;
-      }
+      if (now - fpsTimer >= 1000) { setFps(frameCount); frameCount = 0; fpsTimer = now; }
 
-      // 1. Process Downscaled Frame for Motion
-      const pCtx = procCanvas.getContext('2d', { willReadFrequently: true });
-      if (pCtx) {
-        pCtx.drawImage(video, 0, 0, 160, 120);
-        const frame = pCtx.getImageData(0, 0, 160, 120);
-        const data = frame.data;
+      if (isActive) {
+        // Transparent overlay — video shows through
+        ctx.clearRect(0, 0, W, H);
 
-        if (prevFrameDataRef.current && prevFrameDataRef.current.length === data.length) {
-          const prev = prevFrameDataRef.current;
-          const midX = 80;
-          const targetMinY = Math.floor(120 * 0.25);
-          const targetMaxY = Math.floor(120 * 0.95);
-
-          let leftMotionSum = 0;
-          let rightMotionSum = 0;
-
-          for (let y = targetMinY; y < targetMaxY; y += 2) {
-            for (let x = 0; x < 160; x += 2) {
-              const i = (y * 160 + x) * 4;
-              const diff = Math.abs(data[i] - prev[i]) +
-                           Math.abs(data[i + 1] - prev[i + 1]) +
-                           Math.abs(data[i + 2] - prev[i + 2]);
-
-              if (diff > 50) {
-                // Since the video is mirrored (scale-x-[-1]), user's left hand is on left side of camera
-                if (x < midX) {
-                  leftMotionSum += diff;
-                } else {
-                  rightMotionSum += diff;
+        // Motion detection
+        const video = videoRef.current;
+        const proc = procRef.current!;
+        if (video && video.readyState >= 2 && video.videoWidth > 0) {
+          const pCtx = proc.getContext('2d', { willReadFrequently: true });
+          if (pCtx) {
+            pCtx.drawImage(video, 0, 0, 160, 90);
+            const frame = pCtx.getImageData(0, 0, 160, 90);
+            const d = frame.data;
+            const prev = prevFrameRef.current;
+            if (prev && prev.length === d.length) {
+              const threshold = (220 + (100 - sensitivity) * 10) * 0.7;
+              const newMotions: Record<string, number> = {};
+              ZONES.forEach(z => {
+                // mirror x because video is flipped
+                const mx = 1 - z.x - z.w;
+                const x0 = Math.floor(mx * 160), x1 = Math.floor((mx + z.w) * 160);
+                const y0 = Math.floor(z.y * 90),  y1 = Math.floor((z.y + z.h) * 90);
+                let sum = 0;
+                for (let py = y0; py < y1; py += 2) {
+                  for (let px = x0; px < x1; px += 2) {
+                    const i = (py * 160 + px) * 4;
+                    const diff = Math.abs(d[i]-prev[i]) + Math.abs(d[i+1]-prev[i+1]) + Math.abs(d[i+2]-prev[i+2]);
+                    if (diff > 20) sum += diff;
+                  }
                 }
-              }
+                newMotions[z.id] = Math.min(100, Math.round(sum / threshold * 100));
+                if (sum >= threshold) fireStrike(z.id);
+              });
+              setMotions(newMotions);
             }
-          }
-
-          // Sensitivity threshold
-          const thresholdMultiplier = trackingMode === 'fingers' ? 0.75 : 1.0;
-          const threshold = (100 - sensitivity) * 120 * thresholdMultiplier;
-
-          const leftNorm = Math.min(100, Math.round((leftMotionSum / (threshold * 1.5)) * 100));
-          const rightNorm = Math.min(100, Math.round((rightMotionSum / (threshold * 1.5)) * 100));
-
-          setLeftMotionLevel(leftNorm);
-          setRightMotionLevel(rightNorm);
-
-          if (leftMotionSum > threshold) {
-            triggerStrike('LEFT');
-          }
-          if (rightMotionSum > threshold) {
-            triggerStrike('RIGHT');
+            prevFrameRef.current = new Uint8ClampedArray(d);
           }
         }
-
-        prevFrameDataRef.current = new Uint8ClampedArray(data);
+      } else {
+        // Dark grid background when camera is off
+        ctx.fillStyle = '#070b16';
+        ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+        ctx.lineWidth = 1;
+        for (let gx = 0; gx < W; gx += 40) { ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke(); }
+        for (let gy = 0; gy < H; gy += 40) { ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(W,gy); ctx.stroke(); }
       }
 
-      // 2. Render Overlay HUD onto Transparent Canvas with Color-Coded Drum Part Zones
-      const oCtx = overlayCanvas.getContext('2d');
-      if (oCtx) {
-        const w = overlayCanvas.width;
-        const h = overlayCanvas.height;
-        oCtx.clearRect(0, 0, w, h);
+      // Draw 8-zone skeleton
+      ZONES.forEach(z => {
+        const zx = Math.round(z.x * W), zy = Math.round(z.y * H);
+        const zw = Math.round(z.w * W), zh = Math.round(z.h * H);
+        const cx = zx + zw / 2, cy = zy + zh / 2;
+        const flash = flashes[z.id];
+        const hand = getInstrumentHand(z.id, handedness, invertHands);
+        const col = hand === 'RIGHT' ? '#FF6D00' : '#00E5FF';
 
-        const padW = w * 0.44;
-        const padH = h * 0.65;
-        const padY = h * 0.28;
+        ctx.save();
+        // Box
+        ctx.strokeStyle = flash ? '#FFF' : col;
+        ctx.lineWidth = flash ? 4 : 2;
+        ctx.fillStyle = flash ? col + 'AA' : (isActive ? col + '22' : col + '18');
+        ctx.beginPath(); ctx.roundRect(zx, zy, zw, zh, 10); ctx.fill(); ctx.stroke();
 
-        // Left Strike Zone (Color Coded)
-        const leftX = w * 0.04;
-        oCtx.save();
-        oCtx.strokeStyle = activeZoneFlash.LEFT ? '#FFFFFF' : leftZoneConfig.color;
-        oCtx.lineWidth = activeZoneFlash.LEFT ? 6 : 3;
-        oCtx.fillStyle = activeZoneFlash.LEFT ? `${leftZoneConfig.color}66` : `${leftZoneConfig.color}1F`;
-        oCtx.beginPath();
-        oCtx.roundRect(leftX, padY, padW, padH, 16);
-        oCtx.fill();
-        oCtx.stroke();
+        // Corner brackets
+        const cL = 10;
+        ctx.strokeStyle = flash ? '#FFF' : col; ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(zx, zy+cL); ctx.lineTo(zx, zy); ctx.lineTo(zx+cL, zy);
+        ctx.moveTo(zx+zw-cL, zy); ctx.lineTo(zx+zw, zy); ctx.lineTo(zx+zw, zy+cL);
+        ctx.moveTo(zx, zy+zh-cL); ctx.lineTo(zx, zy+zh); ctx.lineTo(zx+cL, zy+zh);
+        ctx.moveTo(zx+zw-cL, zy+zh); ctx.lineTo(zx+zw, zy+zh); ctx.lineTo(zx+zw, zy+zh-cL);
+        ctx.stroke();
 
-        // Left Zone Header
-        oCtx.fillStyle = leftZoneConfig.color;
-        oCtx.font = 'bold 15px "Montserrat", sans-serif';
-        oCtx.fillText('LEFT AIR ZONE', leftX + 14, padY + 26);
+        // Cymbal or drum icon
+        const r = Math.min(zw, zh) * 0.3;
+        ctx.strokeStyle = flash ? '#FFF' : col + '99'; ctx.lineWidth = 1.5;
+        if (z.type === 'cymbal') {
+          ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.stroke();
+          ctx.beginPath(); ctx.arc(cx, cy, r*0.6, 0, Math.PI*2); ctx.stroke();
+          ctx.fillStyle = flash ? '#FFF' : col;
+          ctx.beginPath(); ctx.arc(cx, cy, r*0.25, 0, Math.PI*2); ctx.fill();
+        } else {
+          ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.stroke();
+          ctx.strokeStyle = col + '44';
+          ctx.beginPath(); ctx.arc(cx, cy, r*0.7, 0, Math.PI*2); ctx.stroke();
+          ctx.strokeStyle = flash ? '#FFF' : col; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(cx-r*0.4, cy); ctx.lineTo(cx+r*0.4, cy);
+          ctx.moveTo(cx, cy-r*0.4); ctx.lineTo(cx, cy+r*0.4); ctx.stroke();
+          ctx.fillStyle = flash ? '#FFF' : col;
+          ctx.beginPath(); ctx.arc(cx, cy, r*0.2, 0, Math.PI*2); ctx.fill();
+        }
 
-        // Drum Part Names
-        oCtx.fillStyle = '#FFFFFF';
-        oCtx.font = 'bold 13px "Montserrat", sans-serif';
-        oCtx.fillText(leftZoneConfig.drumParts, leftX + 14, padY + 50);
+        // Label
+        ctx.fillStyle = flash ? '#FFF' : col;
+        ctx.font = 'bold 10px monospace';
+        ctx.fillText(z.label, zx+6, zy+14);
+        ctx.fillStyle = '#FFF';
+        ctx.font = '9px monospace';
+        ctx.fillText(hand === 'RIGHT' ? 'RH' : 'LH', zx+6, zy+26);
 
-        // Strike Action
-        oCtx.fillStyle = leftZoneConfig.color;
-        oCtx.font = '11px monospace';
-        oCtx.fillText(
-          trackingMode === 'fingers' ? '👉 HIT WITH INDEX FINGER' : '🥢 HIT WITH DRUMSTICK',
-          leftX + 14,
-          padY + 74
-        );
-        oCtx.restore();
+        ctx.restore();
+      });
 
-        // Right Strike Zone (Color Coded)
-        const rightX = w * 0.52;
-        oCtx.save();
-        oCtx.strokeStyle = activeZoneFlash.RIGHT ? '#FFFFFF' : rightZoneConfig.color;
-        oCtx.lineWidth = activeZoneFlash.RIGHT ? 6 : 3;
-        oCtx.fillStyle = activeZoneFlash.RIGHT ? `${rightZoneConfig.color}66` : `${rightZoneConfig.color}1F`;
-        oCtx.beginPath();
-        oCtx.roundRect(rightX, padY, padW, padH, 16);
-        oCtx.fill();
-        oCtx.stroke();
-
-        // Right Zone Header
-        oCtx.fillStyle = rightZoneConfig.color;
-        oCtx.font = 'bold 15px "Montserrat", sans-serif';
-        oCtx.fillText('RIGHT AIR ZONE', rightX + 14, padY + 26);
-
-        // Drum Part Names
-        oCtx.fillStyle = '#FFFFFF';
-        oCtx.font = 'bold 13px "Montserrat", sans-serif';
-        oCtx.fillText(rightZoneConfig.drumParts, rightX + 14, padY + 50);
-
-        // Strike Action
-        oCtx.fillStyle = rightZoneConfig.color;
-        oCtx.font = '11px monospace';
-        oCtx.fillText(
-          trackingMode === 'fingers' ? '👉 HIT WITH INDEX FINGER' : '🥢 HIT WITH DRUMSTICK',
-          rightX + 14,
-          padY + 74
-        );
-        oCtx.restore();
-      }
-
-      animId = requestAnimationFrame(processMotion);
+      raf = requestAnimationFrame(loop);
     };
 
-    animId = requestAnimationFrame(processMotion);
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [isActive, sensitivity, flashes, handedness, invertHands, fireStrike]);
 
-    return () => {
-      cancelAnimationFrame(animId);
-    };
-  }, [isActive, sensitivity, trackingMode, triggerStrike, activeZoneFlash, leftZoneConfig, rightZoneConfig]);
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = overlayRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const rx = (e.clientX - rect.left) / rect.width;
+    const ry = (e.clientY - rect.top)  / rect.height;
+    const zone = ZONES.find(z => rx >= z.x && rx <= z.x+z.w && ry >= z.y && ry <= z.y+z.h);
+    if (zone) fireStrike(zone.id);
+  };
 
   return (
-    <div className="flex flex-col gap-2 rounded-xl bg-gradient-to-b from-slate-900 via-[#0e1628] to-[#070b14] border border-slate-800 p-3 shadow-xl overflow-hidden">
-      {/* Top Header */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-        <div className="flex items-center gap-2">
-          <div className="p-1 rounded-lg bg-emerald-950 border border-emerald-500/30 text-emerald-400">
-            <Camera className="w-4 h-4" />
+    <div style={{ display:'flex', flexDirection:'column', gap:'8px', borderRadius:'12px', background:'linear-gradient(180deg,#0f172a,#0e1628,#070b14)', border:'1px solid #1e293b', padding:'10px' }}>
+
+      {/* ── HEADER ── */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'1px solid #1e293b', paddingBottom:'8px', flexWrap:'wrap', gap:'6px' }}>
+        <div>
+          <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+            <span style={{ fontSize:'14px', fontWeight:900, color:'#fff', fontFamily:'monospace' }}>🥁 AIR DRUMMING</span>
+            {isActive && (
+              <span style={{ fontSize:'10px', color:'#34d399', background:'#022c22', border:'1px solid #10b981', borderRadius:'4px', padding:'1px 6px', fontFamily:'monospace' }}>
+                ● LIVE {resolution} · {fps}fps
+              </span>
+            )}
+            {isDemoMode && (
+              <span style={{ fontSize:'10px', color:'#c084fc', background:'#3b0764', border:'1px solid #a855f7', borderRadius:'4px', padding:'1px 6px', fontFamily:'monospace' }}>
+                ✨ DEMO RUNNING
+              </span>
+            )}
+            {!isActive && !isDemoMode && (
+              <span style={{ fontSize:'10px', color:'#64748b', background:'#1e293b', border:'1px solid #334155', borderRadius:'4px', padding:'1px 6px', fontFamily:'monospace' }}>
+                STANDBY
+              </span>
+            )}
           </div>
-          <div>
-            <h3 className="font-display font-black text-xs sm:text-sm text-white flex items-center gap-2">
-              AIR DRUMMING
-              {isActive && (
-                <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
-                  ● {fps} FPS
-                </span>
-              )}
-            </h3>
-            <p className="text-[10px] font-mono-code text-slate-400">
-              Motion-tracked visual strike zones for drumsticks & index fingers
-            </p>
-          </div>
+          {deviceLabel && <div style={{ fontSize:'10px', color:'#64748b', fontFamily:'monospace', marginTop:'2px' }}>📷 {deviceLabel}</div>}
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div style={{ display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap' }}>
+          {/* DEMO MODE */}
+          <button
+            onClick={() => { if (isActive) stopCamera(); setIsDemoMode(p => !p); }}
+            style={{ padding:'4px 10px', borderRadius:'6px', border:'1px solid #7c3aed', background: isDemoMode ? '#7c3aed' : '#3b076699', color: isDemoMode ? '#fff' : '#c084fc', fontWeight:700, fontSize:'11px', cursor:'pointer', fontFamily:'monospace' }}
+          >
+            ✨ {isDemoMode ? 'STOP DEMO' : 'DEMO MODE'}
+          </button>
+
+          {/* START / STOP CAMERA */}
           {isActive ? (
-            <button
-              onClick={stopCamera}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-500/40 text-xs font-mono-code font-bold transition-colors"
-            >
-              <CameraOff className="w-3.5 h-3.5" />
-              <span>Turn Off</span>
+            <button onClick={stopCamera} style={{ padding:'4px 10px', borderRadius:'6px', border:'1px solid #ef4444', background:'#450a0a', color:'#fca5a5', fontWeight:700, fontSize:'11px', cursor:'pointer', fontFamily:'monospace' }}>
+              ⏹ STOP CAMERA
             </button>
           ) : (
-            <button
-              onClick={startCamera}
-              className="flex items-center gap-1 px-3 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all"
-            >
-              <Video className="w-3.5 h-3.5" />
-              <span>START AIR DRUMMING</span>
+            <button onClick={startCamera} disabled={isStarting} style={{ padding:'4px 12px', borderRadius:'6px', border:'none', background: isStarting ? '#374151' : 'linear-gradient(90deg,#059669,#0d9488)', color:'#fff', fontWeight:900, fontSize:'11px', cursor: isStarting ? 'not-allowed' : 'pointer', fontFamily:'monospace' }}>
+              {isStarting ? '⏳ STARTING...' : '📷 START CAMERA'}
             </button>
           )}
+
+          {/* DIAGNOSTICS */}
+          <button
+            onClick={() => setShowDiag(p => !p)}
+            style={{ padding:'4px 8px', borderRadius:'6px', border:`1px solid ${showDiag ? '#f59e0b' : '#334155'}`, background: showDiag ? '#451a03' : '#1e293b', color: showDiag ? '#fcd34d' : '#94a3b8', fontWeight:700, fontSize:'11px', cursor:'pointer', fontFamily:'monospace' }}
+          >
+            🔍 LOGS
+          </button>
         </div>
       </div>
 
+      {/* ── ERROR BANNER ── */}
       {cameraError && (
-        <div className="p-2 rounded-lg bg-red-950/70 border border-red-500/50 text-red-200 text-[11px] font-mono-code flex items-start gap-2">
-          <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-          <div className="flex flex-col">
-            <strong>Camera Permission Required:</strong>
-            <span>Please allow camera access when prompted by your browser to use Air Drumming.</span>
+        <div style={{ padding:'8px', borderRadius:'8px', background:'#450a0a', border:'1px solid #ef4444', color:'#fca5a5', fontSize:'11px', fontFamily:'monospace' }}>
+          ⚠️ {cameraError}
+          <div style={{ marginTop:'6px', display:'flex', gap:'6px' }}>
+            <button onClick={startCamera} style={{ padding:'2px 8px', borderRadius:'4px', background:'#7f1d1d', color:'#fff', border:'none', cursor:'pointer', fontSize:'10px', fontFamily:'monospace', fontWeight:700 }}>🔄 RETRY</button>
+            <button onClick={() => { setCameraError(null); setIsDemoMode(true); }} style={{ padding:'2px 8px', borderRadius:'4px', background:'#3b0764', color:'#c084fc', border:'none', cursor:'pointer', fontSize:'10px', fontFamily:'monospace', fontWeight:700 }}>✨ TRY DEMO INSTEAD</button>
           </div>
         </div>
       )}
 
-      {/* Viewport */}
-      {isActive ? (
-        <div className="flex flex-col gap-2">
-          {/* Live Video with Canvas Overlay */}
-          <div className="relative w-full aspect-[16/9] max-h-[240px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover transform scale-x-[-1]"
-            />
-
-            <canvas
-              ref={overlayCanvasRef}
-              width={640}
-              height={360}
-              className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-            />
-          </div>
-
-          {/* Color-Coded Drum Part Zone Cards with Motion Gauges */}
-          <div className="grid grid-cols-2 gap-2 text-[11px] font-mono-code">
-            {/* Left Zone Card */}
-            <div className={`flex flex-col gap-1 p-2 rounded-lg border ${leftZoneConfig.bgClass}`}>
-              <div className="flex items-center justify-between">
-                <span className="font-bold flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: leftZoneConfig.color }} />
-                  LEFT ZONE
-                </span>
-                <span className="font-black">{leftMotionLevel}%</span>
-              </div>
-              <div className="font-display font-bold text-xs text-white truncate">
-                {leftZoneConfig.drumParts}
-              </div>
-              <div className="w-full h-1.5 rounded-full bg-slate-900 overflow-hidden mt-0.5">
-                <div
-                  className={`h-full ${leftZoneConfig.barColorClass} transition-all duration-75`}
-                  style={{ width: `${leftMotionLevel}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Right Zone Card */}
-            <div className={`flex flex-col gap-1 p-2 rounded-lg border ${rightZoneConfig.bgClass}`}>
-              <div className="flex items-center justify-between">
-                <span className="font-bold flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: rightZoneConfig.color }} />
-                  RIGHT ZONE
-                </span>
-                <span className="font-black">{rightMotionLevel}%</span>
-              </div>
-              <div className="font-display font-bold text-xs text-white truncate">
-                {rightZoneConfig.drumParts}
-              </div>
-              <div className="w-full h-1.5 rounded-full bg-slate-900 overflow-hidden mt-0.5">
-                <div
-                  className={`h-full ${rightZoneConfig.barColorClass} transition-all duration-75`}
-                  style={{ width: `${rightMotionLevel}%` }}
-                />
-              </div>
+      {/* ── DIAGNOSTICS PANEL ── */}
+      {showDiag && (
+        <div style={{ padding:'8px', borderRadius:'8px', background:'#000', border:'1px solid #f59e0b88', fontFamily:'monospace', fontSize:'10px', color:'#fcd34d' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', borderBottom:'1px solid #f59e0b44', paddingBottom:'4px', marginBottom:'4px' }}>
+            <strong>🔍 CAMERA DIAGNOSTICS</strong>
+            <div style={{ display:'flex', gap:'8px' }}>
+              <button onClick={() => setDiagLogs([])} style={{ color:'#94a3b8', background:'none', border:'none', cursor:'pointer', fontSize:'10px' }}>Clear</button>
+              <button onClick={() => setShowDiag(false)} style={{ color:'#fcd34d', background:'none', border:'none', cursor:'pointer', fontWeight:700 }}>✕</button>
             </div>
           </div>
-
-          {/* Controls */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-950/80 p-2 rounded-lg border border-slate-800 text-xs">
-            {/* Tracking Mode Switcher */}
-            <div className="flex flex-col gap-1">
-              <span className="font-mono-code font-bold text-slate-300 flex items-center gap-1 text-[11px]">
-                <HandIcon className="w-3 h-3 text-cyan-400" />
-                STRIKE TRACKING TYPE:
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setTrackingMode('fingers')}
-                  className={`flex-1 py-1 rounded font-display font-bold text-[11px] transition-all ${
-                    trackingMode === 'fingers'
-                      ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-black shadow-[0_0_8px_#00E5FF]'
-                      : 'bg-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  👉 INDEX FINGERS
-                </button>
-                <button
-                  onClick={() => setTrackingMode('sticks')}
-                  className={`flex-1 py-1 rounded font-display font-bold text-[11px] transition-all ${
-                    trackingMode === 'sticks'
-                      ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-black shadow-[0_0_8px_#FF6D00]'
-                      : 'bg-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  🥢 DRUMSTICKS
-                </button>
-              </div>
-            </div>
-
-            {/* Motion Sensitivity Slider */}
-            <div className="flex flex-col gap-1">
-              <div className="flex justify-between font-mono-code text-slate-300 text-[11px]">
-                <span className="flex items-center gap-1">
-                  <Sliders className="w-3 h-3 text-amber-400" />
-                  SENSITIVITY:
-                </span>
-                <span className="text-cyan-400 font-bold">{sensitivity}%</span>
-              </div>
-              <input
-                type="range"
-                min="15"
-                max="75"
-                value={sensitivity}
-                onChange={(e) => setSensitivity(Number(e.target.value))}
-                className="w-full accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
-              />
-            </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'4px', color:'#cbd5e1', marginBottom:'6px' }}>
+            <span>HTTPS: <strong style={{ color: window.isSecureContext ? '#34d399' : '#f87171' }}>{window.isSecureContext ? 'YES ✓' : 'NO ✗'}</strong></span>
+            <span>MediaDevices: <strong style={{ color: navigator.mediaDevices ? '#34d399' : '#f87171' }}>{navigator.mediaDevices ? 'OK ✓' : 'MISSING ✗'}</strong></span>
+            <span>Camera State: <strong style={{ color:'#fff' }}>{isActive ? 'ACTIVE' : 'IDLE'}</strong></span>
+            <span>Resolution: <strong style={{ color:'#fff' }}>{resolution || 'N/A'}</strong></span>
           </div>
-
-          {/* Quick Manual Test Buttons */}
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => triggerStrike('LEFT')}
-              className={`py-1.5 px-2 rounded-lg font-mono-code font-bold text-[11px] flex items-center justify-center gap-1 transition-colors border ${
-                isFloorBassRight
-                  ? 'bg-cyan-950 hover:bg-cyan-900 border-cyan-500/40 text-cyan-200'
-                  : 'bg-orange-950 hover:bg-orange-900 border-orange-500/40 text-orange-200'
-              }`}
-            >
-              <Zap className="w-3 h-3" />
-              <span>Test Left Air Strike</span>
-            </button>
-            <button
-              onClick={() => triggerStrike('RIGHT')}
-              className={`py-1.5 px-2 rounded-lg font-mono-code font-bold text-[11px] flex items-center justify-center gap-1 transition-colors border ${
-                isFloorBassRight
-                  ? 'bg-orange-950 hover:bg-orange-900 border-orange-500/40 text-orange-200'
-                  : 'bg-cyan-950 hover:bg-cyan-900 border-cyan-500/40 text-cyan-200'
-              }`}
-            >
-              <Zap className="w-3 h-3" />
-              <span>Test Right Air Strike</span>
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-950/60 border border-slate-800 text-xs font-mono-code text-slate-300">
-          <div className="flex items-center gap-1.5 text-amber-300 font-bold">
-            <Video className="w-3.5 h-3.5 text-amber-400" />
-            <span>Air Drumming Sensor Ready</span>
-          </div>
-          <p className="text-[11px] text-slate-400">
-            Click <strong className="text-emerald-400">"START AIR DRUMMING"</strong> to activate camera tracking. You will see two color-coded zones:
-          </p>
-          <div className="grid grid-cols-2 gap-2 mt-1">
-            <div className={`p-2 rounded border ${leftZoneConfig.bgClass}`}>
-              <div className="font-bold flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: leftZoneConfig.color }} />
-                LEFT ZONE:
-              </div>
-              <div className="text-white font-bold text-[11px]">{leftZoneConfig.drumParts}</div>
-              <div className="text-[10px] opacity-75 mt-0.5">👉 Index Finger or 🥢 Left Stick</div>
-            </div>
-            <div className={`p-2 rounded border ${rightZoneConfig.bgClass}`}>
-              <div className="font-bold flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: rightZoneConfig.color }} />
-                RIGHT ZONE:
-              </div>
-              <div className="text-white font-bold text-[11px]">{rightZoneConfig.drumParts}</div>
-              <div className="text-[10px] opacity-75 mt-0.5">👉 Index Finger or 🥢 Right Stick</div>
-            </div>
+          <div style={{ maxHeight:'80px', overflowY:'auto', background:'#0f172a', padding:'4px', borderRadius:'4px', color:'#94a3b8', fontSize:'9px' }}>
+            {diagLogs.length === 0 ? 'No logs yet. Click START CAMERA.' : diagLogs.map((l,i) => <div key={i}>{l}</div>)}
           </div>
         </div>
       )}
+
+      {/* ── VIDEO + CANVAS VIEWPORT ── */}
+      <div style={{ position:'relative', width:'100%', aspectRatio:'16/9', maxHeight:'220px', borderRadius:'8px', overflow:'hidden', border:'2px solid #334155', background:'#000' }}>
+        {/* Real video element — fills container behind canvas */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{ position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover', transform:'scaleX(-1)', opacity: isActive ? 1 : 0, transition:'opacity 0.2s' }}
+        />
+
+        {/* Skeleton overlay canvas */}
+        <canvas
+          ref={overlayRef}
+          width={640}
+          height={360}
+          onClick={handleCanvasClick}
+          style={{ position:'absolute', inset:0, width:'100%', height:'100%', cursor:'pointer', zIndex:10 }}
+          title="Click a zone to play it"
+        />
+
+        {/* Paused overlay */}
+        {isActive && isPaused && (
+          <div style={{ position:'absolute', inset:0, zIndex:20, display:'flex', alignItems:'center', justifyContent:'center', background:'rgba(0,0,0,0.6)' }}>
+            <button onClick={() => videoRef.current?.play()} style={{ padding:'6px 14px', borderRadius:'8px', background:'#059669', color:'#fff', fontWeight:700, fontSize:'12px', border:'none', cursor:'pointer' }}>▶ Resume Feed</button>
+          </div>
+        )}
+
+        {/* Hand key guide */}
+        <div style={{ position:'absolute', top:'6px', left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,0.75)', border:'1px solid #334155', borderRadius:'9999px', padding:'2px 10px', display:'flex', gap:'8px', fontSize:'9px', fontFamily:'monospace', zIndex:15, whiteSpace:'nowrap' }}>
+          <span style={{ color:'#67e8f9' }}>● CYAN = LEFT [D/F]</span>
+          <span style={{ color:'#6b7280' }}>·</span>
+          <span style={{ color:'#fb923c' }}>● ORANGE = RIGHT [J/K]</span>
+        </div>
+      </div>
+
+      {/* ── 8-ZONE STATUS GRID ── */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'4px', fontFamily:'monospace' }}>
+        {ZONES.map(z => {
+          const hand = getInstrumentHand(z.id, handedness, invertHands);
+          const isRight = hand === 'RIGHT';
+          const flash = flashes[z.id];
+          const motion = motions[z.id] || 0;
+          const hitCount = hits[z.id] || 0;
+          return (
+            <button
+              key={z.id}
+              onClick={() => fireStrike(z.id)}
+              style={{
+                display:'flex', flexDirection:'column', alignItems:'center', gap:'2px',
+                padding:'4px', borderRadius:'6px', border:`1px solid ${flash ? '#fff' : isRight ? '#f9731688' : '#06b6d488'}`,
+                background: flash ? '#fff' : isRight ? '#43140733' : '#08334433',
+                color: flash ? '#000' : isRight ? '#fdba74' : '#67e8f9',
+                cursor:'pointer', transition:'all 0.1s',
+              }}
+            >
+              <span style={{ fontSize:'9px', fontWeight:700, textAlign:'center' }}>{z.label}</span>
+              <div style={{ width:'100%', height:'3px', background:'#1e293b', borderRadius:'2px', overflow:'hidden' }}>
+                <div style={{ width:`${motion}%`, height:'100%', background: isRight ? '#f97316' : '#22d3ee', transition:'width 70ms' }} />
+              </div>
+              <span style={{ fontSize:'8px', opacity:0.7 }}>{hitCount > 0 ? `${hitCount}×` : isRight ? 'RH' : 'LH'}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── SENSITIVITY ── */}
+      <div style={{ background:'#0f172a', border:'1px solid #1e293b', borderRadius:'8px', padding:'8px', display:'flex', flexDirection:'column', gap:'4px' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', fontSize:'10px', fontFamily:'monospace', color:'#94a3b8' }}>
+          <span>🎚 MOTION SENSITIVITY</span>
+          <span style={{ color:'#22d3ee', fontWeight:700 }}>{sensitivity}%</span>
+        </div>
+        <input type="range" min={20} max={95} value={sensitivity} onChange={e => setSensitivity(+e.target.value)}
+          style={{ width:'100%', accentColor:'#22d3ee', cursor:'pointer' }} />
+        <div style={{ display:'flex', justifyContent:'space-between', fontSize:'9px', fontFamily:'monospace', color:'#475569' }}>
+          <button onClick={() => setSensitivity(45)} style={{ background:'none', border:'none', color:'#475569', cursor:'pointer', fontSize:'9px' }}>Gentle (45%)</button>
+          <button onClick={() => setSensitivity(65)} style={{ background:'none', border:'none', color:'#fbbf24', cursor:'pointer', fontSize:'9px', fontWeight:700 }}>Default (65%)</button>
+          <button onClick={() => setSensitivity(85)} style={{ background:'none', border:'none', color:'#475569', cursor:'pointer', fontSize:'9px' }}>Ultra (85%)</button>
+        </div>
+      </div>
     </div>
   );
 };
