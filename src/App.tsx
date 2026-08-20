@@ -770,7 +770,7 @@ export const App: React.FC = () => {
       </nav>
 
       {/* 3. DYNAMIC ACTIVE SCREEN VIEWPORT (STRICT ZERO SCROLLBAR) */}
-      <main className="flex-1 min-h-0 p-2 overflow-hidden flex flex-col justify-center">
+      <main className={`flex-1 min-h-0 p-2 flex flex-col justify-center ${activeTab === 'camera' ? 'overflow-y-auto' : 'overflow-hidden'}`}>
         {/* TAB 1: MAIN DRUM STAGE (RHYTHM HIGHWAY + REALISTIC ACOUSTIC KIT) */}
         {activeTab === 'stage' && (
           <div className="w-full h-full max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-2 items-center overflow-hidden">
@@ -815,7 +815,7 @@ export const App: React.FC = () => {
 
         {/* TAB 2: AIR DRUMMING MOTION SENSOR VIEWPORT */}
         {activeTab === 'camera' && (
-          <div className="w-full h-full flex flex-col justify-center max-w-3xl mx-auto overflow-y-auto p-1">
+          <div style={{ width: '100%', maxWidth: 768, margin: '0 auto', overflowY: 'auto', padding: 4 }}>
             <AirDrummingCamera
               onAirStrike={(instrument, hand) => {
                 audioEngine.playInstrument(instrument, 1.0);
