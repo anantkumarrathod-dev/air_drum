@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Hand, Handedness, DrumInstrumentId } from '../types/drum';
 import { getInstrumentHand } from '../data/beatLibrary';
-import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, RefreshCw, CheckCircle2, Play, Info, Sparkles } from 'lucide-react';
+import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, RefreshCw, CheckCircle2, Play, Info, Sparkles, HelpCircle } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
@@ -72,7 +72,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
   const addLog = (msg: string) => {
     const time = new Date().toLocaleTimeString();
-    setDiagnosticLogs((prev) => [`[${time}] ${msg}`, ...prev.slice(0, 15)]);
+    setDiagnosticLogs((prev) => [`[${time}] ${msg}`, ...prev.slice(0, 20)]);
   };
 
   const triggerStrike = useCallback((instId: DrumInstrumentId) => {
@@ -158,7 +158,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             break;
           }
         } catch (err: unknown) {
-          addLog(`Constraint failed: ${err instanceof Error ? err.message : String(err)}`);
+          addLog(`Constraint attempt failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
@@ -186,7 +186,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
         try {
           await video.play();
-          addLog('video.play() called successfully');
+          addLog('video.play() initiated');
           if (video.videoWidth > 0) {
             setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
           }
@@ -549,9 +549,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                   ● LIVE FEED {cameraResolution ? `(${cameraResolution})` : ''} • {fps} FPS
                 </span>
               ) : isDemoMode ? (
-                <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 border border-purple-500/40 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-purple-400 animate-pulse" />
-                  ● DEMO AUTO-TRACKING
+                <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 border border-purple-500/40 flex items-center gap-1 animate-pulse">
+                  <Sparkles className="w-3 h-3 text-purple-400" />
+                  ● DEMO AUTO-TRACKING ACTIVE
                 </span>
               ) : (
                 <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
@@ -566,6 +566,22 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {/* Demo Mode Button */}
+          <button
+            onClick={() => {
+              if (isActive) stopCamera();
+              setIsDemoMode((p) => !p);
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-display font-black transition-all ${
+              isDemoMode
+                ? 'bg-purple-600 text-white shadow-[0_0_12px_#A855F7]'
+                : 'bg-purple-950/70 hover:bg-purple-900 border border-purple-500/50 text-purple-200'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+            <span>{isDemoMode ? 'STOP DEMO' : '✨ DEMO MODE'}</span>
+          </button>
+
           {/* Camera Selector Dropdown if multiple devices */}
           {availableDevices.length > 1 && !isActive && (
             <select
@@ -603,19 +619,21 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </button>
           )}
 
-          {/* Diagnostic Toggle */}
+          {/* Diagnostic Toggle Button */}
           <button
             onClick={() => setShowDiagnostics((p) => !p)}
-            className={`p-1 rounded-lg border text-xs font-mono-code transition-colors ${
+            className={`p-1.5 rounded-lg border text-xs font-mono-code transition-colors flex items-center gap-1 ${
               showDiagnostics ? 'bg-amber-950 border-amber-500 text-amber-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
             }`}
             title="Toggle Live Camera Diagnostics"
           >
-            <Info className="w-3.5 h-3.5" />
+            <Info className="w-3.5 h-3.5 text-amber-400" />
+            <span className="text-[10px] font-bold hidden sm:inline">LOGS</span>
           </button>
         </div>
       </div>
 
+      {/* Camera Error Banner */}
       {cameraError && (
         <div className="p-2 rounded-lg bg-red-950/80 border border-red-500 text-red-200 text-[10px] font-mono-code flex items-start gap-1.5">
           <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
@@ -630,10 +648,10 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                 🔄 Retry Camera
               </button>
               <button
-                onClick={() => setIsDemoMode((p) => !p)}
-                className="px-2 py-0.5 rounded bg-purple-900 hover:bg-purple-800 text-purple-200 font-bold text-[9px]"
+                onClick={() => setShowDiagnostics(true)}
+                className="px-2 py-0.5 rounded bg-amber-900 hover:bg-amber-800 text-amber-200 font-bold text-[9px]"
               >
-                ✨ Try Demo Mode
+                🔍 View Diagnostics
               </button>
             </div>
           </div>
@@ -642,20 +660,28 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
       {/* Live Diagnostics Panel */}
       {showDiagnostics && (
-        <div className="p-2 rounded-lg bg-black/90 border border-amber-500/40 text-[9px] font-mono-code text-amber-200 flex flex-col gap-1">
+        <div className="p-2 rounded-lg bg-black/95 border border-amber-500/50 text-[10px] font-mono-code text-amber-200 flex flex-col gap-1.5 shadow-2xl">
           <div className="flex justify-between items-center border-b border-amber-500/20 pb-1">
-            <span className="font-bold text-amber-400">CAMERA & SENSOR DIAGNOSTICS</span>
-            <button onClick={() => setDiagnosticLogs([])} className="text-slate-400 hover:text-white">Clear</button>
+            <span className="font-bold text-amber-400 flex items-center gap-1">
+              <HelpCircle className="w-3.5 h-3.5" />
+              CAMERA & WEBCAM DIAGNOSTICS
+            </span>
+            <div className="flex gap-2">
+              <button onClick={() => setDiagnosticLogs([])} className="text-slate-400 hover:text-white text-[9px]">Clear</button>
+              <button onClick={() => setShowDiagnostics(false)} className="text-amber-400 hover:text-white font-bold">✕</button>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-1 text-slate-300">
+          <div className="grid grid-cols-2 gap-1.5 text-slate-300 text-[9px]">
             <div>HTTPS Context: <strong className={window.isSecureContext ? 'text-emerald-400' : 'text-red-400'}>{window.isSecureContext ? 'YES (Secure)' : 'NO (Insecure)'}</strong></div>
             <div>MediaDevices API: <strong className={navigator.mediaDevices ? 'text-emerald-400' : 'text-red-400'}>{navigator.mediaDevices ? 'AVAILABLE' : 'UNAVAILABLE'}</strong></div>
             <div>Active State: <strong className="text-white">{isActive ? 'ACTIVE' : 'IDLE'}</strong></div>
-            <div>Video Res: <strong className="text-white">{cameraResolution || '0x0'}</strong></div>
+            <div>Video Resolution: <strong className="text-white">{cameraResolution || '0x0'}</strong></div>
+            <div>Video Paused: <strong className={isVideoPaused ? 'text-amber-400' : 'text-emerald-400'}>{isVideoPaused ? 'YES' : 'NO'}</strong></div>
+            <div>Devices Found: <strong className="text-white">{availableDevices.length}</strong></div>
           </div>
-          <div className="max-h-20 overflow-y-auto bg-slate-950/80 p-1 rounded border border-slate-800 flex flex-col gap-0.5 text-slate-400">
+          <div className="max-h-24 overflow-y-auto bg-slate-950/90 p-1.5 rounded border border-slate-800 flex flex-col gap-0.5 text-slate-400 text-[9px]">
             {diagnosticLogs.length === 0 ? (
-              <span>No logs yet. Click "START CAMERA" to record events.</span>
+              <span>No logs recorded yet. Click "START CAMERA" to see initialization steps.</span>
             ) : (
               diagnosticLogs.map((l, i) => <div key={i}>{l}</div>)
             )}
