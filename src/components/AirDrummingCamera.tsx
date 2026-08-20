@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Hand, Handedness, DrumInstrumentId } from '../types/drum';
 import { getInstrumentHand } from '../data/beatLibrary';
-import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, Sparkles, RefreshCw } from 'lucide-react';
+import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, RefreshCw } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
@@ -13,6 +13,7 @@ interface AirZoneDef {
   id: DrumInstrumentId;
   name: string;
   shortName: string;
+  type: 'cymbal' | 'drum';
   xRatio: number;
   yRatio: number;
   wRatio: number;
@@ -22,18 +23,18 @@ interface AirZoneDef {
 // 8 Discrete Drum Zones in 3D Air Space
 const AIR_ZONES: AirZoneDef[] = [
   // Top Row: Cymbals & Rack Toms
-  { id: 'crash', name: 'CRASH CYMBAL', shortName: 'CRASH', xRatio: 0.03, yRatio: 0.03, wRatio: 0.21, hRatio: 0.27 },
-  { id: 'high_tom', name: 'HIGH TOM', shortName: 'HI-TOM', xRatio: 0.27, yRatio: 0.03, wRatio: 0.21, hRatio: 0.27 },
-  { id: 'mid_tom', name: 'MID TOM', shortName: 'MID-TOM', xRatio: 0.52, yRatio: 0.03, wRatio: 0.21, hRatio: 0.27 },
-  { id: 'ride', name: 'RIDE CYMBAL', shortName: 'RIDE', xRatio: 0.76, yRatio: 0.03, wRatio: 0.21, hRatio: 0.27 },
+  { id: 'crash', name: 'CRASH CYMBAL', shortName: 'CRASH 16"', type: 'cymbal', xRatio: 0.02, yRatio: 0.03, wRatio: 0.22, hRatio: 0.28 },
+  { id: 'high_tom', name: 'HIGH TOM', shortName: 'HIGH TOM', type: 'drum', xRatio: 0.26, yRatio: 0.03, wRatio: 0.22, hRatio: 0.28 },
+  { id: 'mid_tom', name: 'MID TOM', shortName: 'MID TOM', type: 'drum', xRatio: 0.52, yRatio: 0.03, wRatio: 0.22, hRatio: 0.28 },
+  { id: 'ride', name: 'RIDE CYMBAL', shortName: 'RIDE 20"', type: 'cymbal', xRatio: 0.76, yRatio: 0.03, wRatio: 0.22, hRatio: 0.28 },
 
   // Middle Row: Hi-Hat, Snare, Floor Tom
-  { id: 'hihat_closed', name: 'HI-HAT', shortName: 'HI-HAT', xRatio: 0.03, yRatio: 0.35, wRatio: 0.21, hRatio: 0.28 },
-  { id: 'snare', name: 'SNARE DRUM', shortName: 'SNARE', xRatio: 0.27, yRatio: 0.35, wRatio: 0.21, hRatio: 0.28 },
-  { id: 'floor_tom', name: 'FLOOR TOM', shortName: 'FLOOR TOM', xRatio: 0.76, yRatio: 0.35, wRatio: 0.21, hRatio: 0.28 },
+  { id: 'hihat_closed', name: 'HI-HAT', shortName: 'HI-HAT 14"', type: 'cymbal', xRatio: 0.02, yRatio: 0.35, wRatio: 0.22, hRatio: 0.29 },
+  { id: 'snare', name: 'SNARE DRUM', shortName: 'SNARE 14"', type: 'drum', xRatio: 0.26, yRatio: 0.35, wRatio: 0.22, hRatio: 0.29 },
+  { id: 'floor_tom', name: 'FLOOR TOM', shortName: 'FLOOR TOM', type: 'drum', xRatio: 0.76, yRatio: 0.35, wRatio: 0.22, hRatio: 0.29 },
 
   // Bottom Center: Bass Drum (Kick)
-  { id: 'bass', name: 'BASS DRUM (KICK)', shortName: 'BASS DRUM', xRatio: 0.35, yRatio: 0.67, wRatio: 0.30, hRatio: 0.30 },
+  { id: 'bass', name: 'BASS DRUM (KICK)', shortName: 'BASS DRUM 22"', type: 'drum', xRatio: 0.33, yRatio: 0.67, wRatio: 0.34, hRatio: 0.30 },
 ];
 
 export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
@@ -75,7 +76,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     setZoneFlashes((prev) => ({ ...prev, [instId]: true }));
     setTimeout(() => {
       setZoneFlashes((prev) => ({ ...prev, [instId]: false }));
-    }, 180);
+    }, 200);
 
     onAirStrike(instId, assignedHand);
   }, [onAirStrike, handedness, invertHands]);
@@ -86,7 +87,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       setIsStarting(true);
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera access is not supported by your browser or requires HTTPS.');
+        throw new Error('Camera API requires HTTPS or a supported browser.');
       }
 
       // 1. Acquire Camera Stream with progressive fallback
@@ -120,7 +121,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       }
 
       if (!stream) {
-        throw new Error('Unable to access camera. Please check your browser camera permissions.');
+        throw new Error('Unable to start camera. Please verify camera permissions in your browser.');
       }
 
       streamRef.current = stream;
@@ -203,10 +204,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     };
   }, []);
 
-  // Main Unified Canvas Render & 8-Zone Motion Detection Loop
+  // Main Unified Canvas Render & 8-Zone Skeleton Loop (Runs ALWAYS)
   useEffect(() => {
-    if (!isActive) return;
-
     let animId: number;
     let frameCount = 0;
     let lastFpsCalcTime = performance.now();
@@ -245,8 +244,10 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         lastFpsCalcTime = now;
       }
 
-      // 2. Draw Mirrored Camera Video directly onto Main Canvas
-      if (video && video.readyState >= 2 && video.videoWidth > 0) {
+      // 2. Draw Background: Live Mirrored Video OR Studio Drum Skeleton Grid
+      const isVideoReady = isActive && video && video.readyState >= 2 && video.videoWidth > 0;
+
+      if (isVideoReady && video) {
         mCtx.save();
         mCtx.translate(w, 0);
         mCtx.scale(-1, 1);
@@ -302,43 +303,149 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           prevFrameDataRef.current = new Uint8ClampedArray(data);
         }
       } else {
-        // Video loading state
-        mCtx.fillStyle = '#060a14';
+        // Studio Skeleton Background when video is offline or loading
+        const bgGrad = mCtx.createLinearGradient(0, 0, 0, h);
+        bgGrad.addColorStop(0, '#0a1020');
+        bgGrad.addColorStop(0.5, '#070b16');
+        bgGrad.addColorStop(1, '#03050a');
+        mCtx.fillStyle = bgGrad;
         mCtx.fillRect(0, 0, w, h);
-        mCtx.fillStyle = '#38bdf8';
-        mCtx.font = 'bold 16px "Montserrat", sans-serif';
-        mCtx.fillText('Connecting video stream...', w / 2 - 100, h / 2);
+
+        // Subtle studio stage grid lines
+        mCtx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+        mCtx.lineWidth = 1;
+        for (let gx = 0; gx < w; gx += 40) {
+          mCtx.beginPath();
+          mCtx.moveTo(gx, 0);
+          mCtx.lineTo(gx, h);
+          mCtx.stroke();
+        }
+        for (let gy = 0; gy < h; gy += 40) {
+          mCtx.beginPath();
+          mCtx.moveTo(0, gy);
+          mCtx.lineTo(w, gy);
+          mCtx.stroke();
+        }
       }
 
-      // 4. Render all 8 Glowing Drum Strike Zones onto Canvas
+      // 4. Render All 8 Color-Coded Drum Skeletons & Wireframes
       AIR_ZONES.forEach((zone) => {
         const zx = Math.round(zone.xRatio * w);
         const zy = Math.round(zone.yRatio * h);
         const zw = Math.round(zone.wRatio * w);
         const zh = Math.round(zone.hRatio * h);
+        const cx = zx + zw / 2;
+        const cy = zy + zh / 2;
 
         const assignedHand = getInstrumentHand(zone.id, handedness, invertHands);
-        const zoneColor = assignedHand === 'RIGHT' ? '#FF6D00' : '#00E5FF';
+        const isRight = assignedHand === 'RIGHT';
+        const zoneColor = isRight ? '#FF6D00' : '#00E5FF';
         const isFlashing = zoneFlashes[zone.id];
 
         mCtx.save();
-        mCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
-        mCtx.lineWidth = isFlashing ? 5 : 2.5;
-        mCtx.fillStyle = isFlashing ? `${zoneColor}66` : `${zoneColor}1F`;
+
+        // 4A. Outer Zone Bounding Box
+        mCtx.strokeStyle = isFlashing ? '#FFFFFF' : isVideoReady ? zoneColor : `${zoneColor}99`;
+        mCtx.lineWidth = isFlashing ? 5 : 2;
+        mCtx.fillStyle = isFlashing
+          ? `${zoneColor}88`
+          : isVideoReady
+          ? `${zoneColor}1F`
+          : `${zoneColor}14`;
+
         mCtx.beginPath();
         mCtx.roundRect(zx, zy, zw, zh, 12);
         mCtx.fill();
         mCtx.stroke();
 
-        // Header
-        mCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
-        mCtx.font = 'bold 12px "Montserrat", sans-serif';
-        mCtx.fillText(zone.shortName, zx + 8, zy + 18);
+        // 4B. AR Corner Crosshairs / Brackets
+        const cLen = 12;
+        mCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
+        mCtx.lineWidth = 3;
+        // Top-Left
+        mCtx.beginPath();
+        mCtx.moveTo(zx, zy + cLen);
+        mCtx.lineTo(zx, zy);
+        mCtx.lineTo(zx + cLen, zy);
+        mCtx.stroke();
+        // Top-Right
+        mCtx.beginPath();
+        mCtx.moveTo(zx + zw - cLen, zy);
+        mCtx.lineTo(zx + zw, zy);
+        mCtx.lineTo(zx + zw, zy + cLen);
+        mCtx.stroke();
+        // Bottom-Left
+        mCtx.beginPath();
+        mCtx.moveTo(zx, zy + zh - cLen);
+        mCtx.lineTo(zx, zy + zh);
+        mCtx.lineTo(zx + cLen, zy + zh);
+        mCtx.stroke();
+        // Bottom-Right
+        mCtx.beginPath();
+        mCtx.moveTo(zx + zw - cLen, zy + zh);
+        mCtx.lineTo(zx + zw, zy + zh);
+        mCtx.lineTo(zx + zw, zy + zh - cLen);
+        mCtx.stroke();
 
-        // Hand & Trigger Label
+        // 4C. Internal Drum/Cymbal Skeleton Wireframe Graphic
+        const radius = Math.min(zw, zh) * 0.32;
+        if (zone.type === 'cymbal') {
+          // Cymbal Skeleton: Concentric Lathed Rings & Bell
+          mCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
+          mCtx.lineWidth = 1.5;
+          mCtx.beginPath();
+          mCtx.arc(cx, cy, radius, 0, Math.PI * 2);
+          mCtx.stroke();
+
+          mCtx.beginPath();
+          mCtx.arc(cx, cy, radius * 0.65, 0, Math.PI * 2);
+          mCtx.stroke();
+
+          // Hammered Bell Center
+          mCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
+          mCtx.beginPath();
+          mCtx.arc(cx, cy, radius * 0.28, 0, Math.PI * 2);
+          mCtx.fill();
+        } else {
+          // Drumhead Skeleton: Rim, Tuning Lugs & Center Strike Crosshairs
+          mCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
+          mCtx.lineWidth = 2;
+          mCtx.beginPath();
+          mCtx.arc(cx, cy, radius, 0, Math.PI * 2);
+          mCtx.stroke();
+
+          // Inner Head Damping Ring
+          mCtx.strokeStyle = `${zoneColor}44`;
+          mCtx.lineWidth = 1;
+          mCtx.beginPath();
+          mCtx.arc(cx, cy, radius * 0.75, 0, Math.PI * 2);
+          mCtx.stroke();
+
+          // Center Strike Dot & Crosshair
+          mCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
+          mCtx.lineWidth = 1.5;
+          mCtx.beginPath();
+          mCtx.moveTo(cx - radius * 0.4, cy);
+          mCtx.lineTo(cx + radius * 0.4, cy);
+          mCtx.moveTo(cx, cy - radius * 0.4);
+          mCtx.lineTo(cx, cy + radius * 0.4);
+          mCtx.stroke();
+
+          mCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
+          mCtx.beginPath();
+          mCtx.arc(cx, cy, radius * 0.22, 0, Math.PI * 2);
+          mCtx.fill();
+        }
+
+        // 4D. Header Label
+        mCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
+        mCtx.font = 'bold 11px "Montserrat", sans-serif';
+        mCtx.fillText(zone.shortName, zx + 8, zy + 16);
+
+        // 4E. Hand & Trigger Tag
         mCtx.fillStyle = '#FFFFFF';
         mCtx.font = '10px monospace';
-        mCtx.fillText(assignedHand === 'RIGHT' ? 'RH [J/K]' : 'LH [D/F]', zx + 8, zy + 34);
+        mCtx.fillText(isRight ? 'RH [J/K]' : 'LH [D/F]', zx + 8, zy + 30);
 
         mCtx.restore();
       });
@@ -383,7 +490,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           </div>
           <div>
             <h3 className="font-display font-black text-xs sm:text-sm text-white flex items-center gap-2">
-              AIR DRUMMING • 8 DRUM ZONES
+              AIR DRUMMING • 8 DRUM SKELETON
               {isActive && (
                 <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
                   ● {fps} FPS {cameraResolution ? `• ${cameraResolution}` : ''}
@@ -391,7 +498,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               )}
             </h3>
             <p className="text-[10px] font-mono-code text-slate-400">
-              8-zone 3D spatial motion tracking for drumsticks & index fingers
+              Interactive 8-zone spatial drum skeleton with stick & finger motion tracking
             </p>
           </div>
         </div>
@@ -412,7 +519,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               className="flex items-center gap-1 px-3 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all disabled:opacity-50"
             >
               {isStarting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Video className="w-3.5 h-3.5" />}
-              <span>{isStarting ? 'STARTING...' : 'START AIR DRUMMING'}</span>
+              <span>{isStarting ? 'CONNECTING CAMERA...' : 'START CAMERA FEED'}</span>
             </button>
           )}
         </div>
@@ -422,53 +529,39 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         <div className="p-2.5 rounded-lg bg-red-950/70 border border-red-500/50 text-red-200 text-[11px] font-mono-code flex items-start gap-2">
           <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
           <div className="flex flex-col gap-0.5">
-            <strong className="text-red-300 font-bold">Camera Permission Required:</strong>
+            <strong className="text-red-300 font-bold">Camera Permission Notice:</strong>
             <span>{cameraError}</span>
             <span className="text-[10px] text-slate-400 mt-1">
-              💡 Tip: Click "Allow" in your browser address bar to enable webcam access, or click the zones below!
+              💡 You can still play the entire 8-zone Drum Skeleton by tapping/clicking anywhere on the canvas or using the buttons below!
             </span>
           </div>
         </div>
       )}
 
-      {/* Viewport: Direct Canvas Renderer with 8 Spatial Drum Zones */}
-      <div className="relative w-full aspect-[16/9] max-h-[250px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
-        {/* Main Visible Canvas: Draws Live Video + 8 Glowing Strike Zones */}
+      {/* Viewport: Direct Canvas Renderer with 8 Spatial Drum Skeletons */}
+      <div className="relative w-full aspect-[16/9] max-h-[255px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
+        {/* Main Canvas (Always Visible & Interactive) */}
         <canvas
           ref={mainCanvasRef}
           width={640}
           height={360}
           onClick={handleCanvasClick}
-          className={`w-full h-full object-cover cursor-pointer transition-opacity duration-200 ${
-            isActive ? 'opacity-100' : 'opacity-0'
-          }`}
+          className="w-full h-full object-cover cursor-pointer select-none"
+          title="Click or strike any drum zone"
         />
 
-        {/* When Camera is Offline: Standby Screen */}
-        {!isActive && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-[#0b1020] to-[#060a14] p-4 text-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-emerald-950/80 border border-emerald-500/50 flex items-center justify-center text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
-              <Video className="w-6 h-6" />
-            </div>
-            <div className="flex flex-col gap-1 max-w-sm">
-              <h4 className="font-display font-black text-sm text-white flex items-center justify-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-emerald-400" />
-                Air Drumming Sensor Offline
-              </h4>
-              <p className="text-[11px] font-mono-code text-slate-400">
-                Click below to turn on your webcam. 8 color-coded zones will appear for each drum part!
-              </p>
-            </div>
-            <button
-              onClick={startCamera}
-              disabled={isStarting}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-display font-black text-xs shadow-[0_0_15px_rgba(16,185,129,0.5)] transition-all active:scale-95 disabled:opacity-50 flex items-center gap-1.5"
-            >
-              {isStarting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Video className="w-3.5 h-3.5" />}
-              <span>{isStarting ? 'CONNECTING CAMERA...' : 'START AIR DRUMMING'}</span>
-            </button>
-          </div>
-        )}
+        {/* Top Floating Guide Banner */}
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none px-3 py-1 rounded-full bg-black/70 backdrop-blur-md border border-slate-700/80 flex items-center gap-2 text-[10px] font-mono-code text-slate-300 shadow-md">
+          <span className="flex items-center gap-1 text-cyan-300">
+            <span className="w-2 h-2 rounded-full bg-cyan-400" />
+            CYAN = LEFT HAND [D/F]
+          </span>
+          <span className="text-slate-500">•</span>
+          <span className="flex items-center gap-1 text-orange-300">
+            <span className="w-2 h-2 rounded-full bg-orange-500" />
+            ORANGE = RIGHT HAND [J/K]
+          </span>
+        </div>
       </div>
 
       {/* 8 Drum Part Live Status Grid */}
