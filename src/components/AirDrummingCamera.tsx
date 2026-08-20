@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Hand, Handedness, DrumInstrumentId } from '../types/drum';
 import { getInstrumentHand } from '../data/beatLibrary';
-import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, RefreshCw, CheckCircle2, Play } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
@@ -50,6 +50,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [fps, setFps] = useState<number>(0);
   const [cameraResolution, setCameraResolution] = useState<string>('');
   const [cameraDeviceLabel, setCameraDeviceLabel] = useState<string>('');
+  const [isVideoPaused, setIsVideoPaused] = useState<boolean>(false);
 
   // Per-zone motion levels & flash states
   const [zoneMotionLevels, setZoneMotionLevels] = useState<Record<string, number>>({});
@@ -85,6 +86,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     try {
       setCameraError(null);
       setIsStarting(true);
+      setIsVideoPaused(false);
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Camera API requires HTTPS or a supported browser.');
@@ -116,7 +118,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           stream = await navigator.mediaDevices.getUserMedia(constraints);
           if (stream) break;
         } catch {
-          // Try next
+          // Try next fallback
         }
       }
 
@@ -136,31 +138,30 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         video.srcObject = stream;
         video.muted = true;
         video.playsInline = true;
+        video.autoplay = true;
 
-        await new Promise<void>((resolve) => {
-          video.onloadedmetadata = async () => {
-            try {
-              await video.play();
-              if (video.videoWidth > 0) {
-                setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
-              }
-            } catch (e) {
-              console.warn('video.play() auto-resume:', e);
+        video.onpause = () => setIsVideoPaused(true);
+        video.onplay = () => setIsVideoPaused(false);
+
+        try {
+          await video.play();
+          if (video.videoWidth > 0) {
+            setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
+          }
+        } catch (e) {
+          console.warn('Initial video.play() err:', e);
+        }
+
+        video.onloadedmetadata = async () => {
+          try {
+            await video.play();
+            if (video.videoWidth > 0) {
+              setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
             }
-            resolve();
-          };
-
-          // Timeout fallback
-          setTimeout(async () => {
-            try {
-              await video?.play();
-              if (video && video.videoWidth > 0) {
-                setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
-              }
-            } catch {}
-            resolve();
-          }, 600);
-        });
+          } catch (playErr) {
+            console.warn('video.play() onloadedmetadata err:', playErr);
+          }
+        };
       }
 
       setIsActive(true);
@@ -174,6 +175,18 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     }
   };
 
+  const resumeVideo = async () => {
+    const video = videoRef.current;
+    if (video) {
+      try {
+        await video.play();
+        setIsVideoPaused(false);
+      } catch (e) {
+        console.warn('Manual resume error:', e);
+      }
+    }
+  };
+
   const stopCamera = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
@@ -184,6 +197,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     }
     setIsActive(false);
     setIsStarting(false);
+    setIsVideoPaused(false);
     prevFrameDataRef.current = null;
     setFps(0);
     setZoneMotionLevels({});
@@ -208,7 +222,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     };
   }, []);
 
-  // Main Canvas Render & Motion Detection Loop (Always Active)
+  // Main Canvas Render & Motion Detection Loop
   useEffect(() => {
     let animId: number;
     let frameCount = 0;
@@ -248,66 +262,67 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         lastFpsCalcTime = now;
       }
 
-      // 2. Optical Flow Processing (When Video is Ready)
-      const isVideoReady = isActive && video && video.readyState >= 2 && video.videoWidth > 0;
+      // 2. Manage Canvas Transparency:
+      // When Camera is ACTIVE: The canvas is 100% TRANSPARENT so the video underneath is crystal clear!
+      if (isActive) {
+        oCtx.clearRect(0, 0, w, h);
 
-      if (isVideoReady && video) {
-        const pCtx = procCanvas.getContext('2d', { willReadFrequently: true });
-        if (pCtx) {
-          pCtx.drawImage(video, 0, 0, 160, 120);
-          const frame = pCtx.getImageData(0, 0, 160, 120);
-          const data = frame.data;
+        // 3. Process Optical Flow from Video
+        if (video && video.readyState >= 2 && video.videoWidth > 0) {
+          const pCtx = procCanvas.getContext('2d', { willReadFrequently: true });
+          if (pCtx) {
+            pCtx.drawImage(video, 0, 0, 160, 120);
+            const frame = pCtx.getImageData(0, 0, 160, 120);
+            const data = frame.data;
 
-          if (prevFrameDataRef.current && prevFrameDataRef.current.length === data.length) {
-            const prev = prevFrameDataRef.current;
-            const thresholdMultiplier = trackingMode === 'fingers' ? 0.65 : 0.9;
-            const rawThreshold = (220 + (100 - sensitivity) * 12) * thresholdMultiplier;
+            if (prevFrameDataRef.current && prevFrameDataRef.current.length === data.length) {
+              const prev = prevFrameDataRef.current;
+              const thresholdMultiplier = trackingMode === 'fingers' ? 0.65 : 0.9;
+              const rawThreshold = (220 + (100 - sensitivity) * 12) * thresholdMultiplier;
 
-            const newMotionLevels: Record<string, number> = {};
+              const newMotionLevels: Record<string, number> = {};
 
-            AIR_ZONES.forEach((zone) => {
-              // Note: Video is mirrored horizontally in CSS (scale-x-[-1]), so we invert the x sampling range
-              const rawX = zone.xRatio;
-              const mirroredX = 1.0 - (rawX + zone.wRatio);
+              AIR_ZONES.forEach((zone) => {
+                // Invert x because video is CSS mirrored (scale-x-[-1])
+                const rawX = zone.xRatio;
+                const mirroredX = 1.0 - (rawX + zone.wRatio);
 
-              const minX = Math.floor(mirroredX * 160);
-              const maxX = Math.floor((mirroredX + zone.wRatio) * 160);
-              const minY = Math.floor(zone.yRatio * 120);
-              const maxY = Math.floor((zone.yRatio + zone.hRatio) * 120);
+                const minX = Math.floor(mirroredX * 160);
+                const maxX = Math.floor((mirroredX + zone.wRatio) * 160);
+                const minY = Math.floor(zone.yRatio * 120);
+                const maxY = Math.floor((zone.yRatio + zone.hRatio) * 120);
 
-              let zoneMotionSum = 0;
+                let zoneMotionSum = 0;
 
-              for (let py = minY; py < maxY; py += 2) {
-                for (let px = minX; px < maxX; px += 2) {
-                  const i = (py * 160 + px) * 4;
-                  const diff = Math.abs(data[i] - prev[i]) +
-                               Math.abs(data[i + 1] - prev[i + 1]) +
-                               Math.abs(data[i + 2] - prev[i + 2]);
+                for (let py = minY; py < maxY; py += 2) {
+                  for (let px = minX; px < maxX; px += 2) {
+                    const i = (py * 160 + px) * 4;
+                    const diff = Math.abs(data[i] - prev[i]) +
+                                 Math.abs(data[i + 1] - prev[i + 1]) +
+                                 Math.abs(data[i + 2] - prev[i + 2]);
 
-                  if (diff > 25) {
-                    zoneMotionSum += diff;
+                    if (diff > 25) {
+                      zoneMotionSum += diff;
+                    }
                   }
                 }
-              }
 
-              const percent = Math.min(100, Math.round((zoneMotionSum / rawThreshold) * 100));
-              newMotionLevels[zone.id] = percent;
+                const percent = Math.min(100, Math.round((zoneMotionSum / rawThreshold) * 100));
+                newMotionLevels[zone.id] = percent;
 
-              if (zoneMotionSum >= rawThreshold) {
-                triggerStrike(zone.id);
-              }
-            });
+                if (zoneMotionSum >= rawThreshold) {
+                  triggerStrike(zone.id);
+                }
+              });
 
-            setZoneMotionLevels(newMotionLevels);
+              setZoneMotionLevels(newMotionLevels);
+            }
+
+            prevFrameDataRef.current = new Uint8ClampedArray(data);
           }
-
-          prevFrameDataRef.current = new Uint8ClampedArray(data);
         }
-
-        // Clear canvas for transparent overlay on top of video
-        oCtx.clearRect(0, 0, w, h);
       } else {
-        // When Camera is Offline: Render Studio Grid Background
+        // When Camera is OFFLINE: Render Studio Stage Grid
         const bgGrad = oCtx.createLinearGradient(0, 0, 0, h);
         bgGrad.addColorStop(0, '#0a1020');
         bgGrad.addColorStop(0.5, '#070b16');
@@ -331,7 +346,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         }
       }
 
-      // 3. Render 8-Zone Skeleton Rig & AR Crosshairs onto Overlay Canvas
+      // 4. Render 8-Zone Skeleton Rig & AR Crosshairs onto Overlay Canvas
       AIR_ZONES.forEach((zone) => {
         const zx = Math.round(zone.xRatio * w);
         const zy = Math.round(zone.yRatio * h);
@@ -347,12 +362,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
         oCtx.save();
 
-        // 3A. Zone Bounding Box
-        oCtx.strokeStyle = isFlashing ? '#FFFFFF' : isVideoReady ? zoneColor : `${zoneColor}99`;
+        // 4A. Zone Bounding Box
+        oCtx.strokeStyle = isFlashing ? '#FFFFFF' : isActive ? zoneColor : `${zoneColor}99`;
         oCtx.lineWidth = isFlashing ? 5 : 2;
         oCtx.fillStyle = isFlashing
           ? `${zoneColor}88`
-          : isVideoReady
+          : isActive
           ? `${zoneColor}1F`
           : `${zoneColor}14`;
 
@@ -361,7 +376,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         oCtx.fill();
         oCtx.stroke();
 
-        // 3B. AR Corner Brackets
+        // 4B. AR Corner Brackets
         const cLen = 12;
         oCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
         oCtx.lineWidth = 3;
@@ -380,7 +395,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         oCtx.lineTo(zx + zw, zy + zh - cLen);
         oCtx.stroke();
 
-        // 3C. Drum/Cymbal Wireframe Graphic
+        // 4C. Drum/Cymbal Wireframe Graphic
         const radius = Math.min(zw, zh) * 0.32;
         if (zone.type === 'cymbal') {
           oCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
@@ -389,6 +404,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           oCtx.arc(cx, cy, radius, 0, Math.PI * 2);
           oCtx.stroke();
 
+          mCtx_arc:
           oCtx.beginPath();
           oCtx.arc(cx, cy, radius * 0.65, 0, Math.PI * 2);
           oCtx.stroke();
@@ -425,7 +441,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           oCtx.fill();
         }
 
-        // 3D. Labels
+        // 4D. Labels
         oCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
         oCtx.font = 'bold 11px "Montserrat", sans-serif';
         oCtx.fillText(zone.shortName, zx + 8, zy + 16);
@@ -537,7 +553,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           autoPlay
           playsInline
           muted
-          className={`absolute inset-0 w-full h-full object-cover transform scale-x-[-1] transition-opacity duration-300 ${
+          className={`absolute inset-0 w-full h-full object-cover transform scale-x-[-1] transition-opacity duration-200 ${
             isActive ? 'opacity-100' : 'opacity-0 pointer-events-none'
           }`}
         />
@@ -551,6 +567,19 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           className="absolute inset-0 w-full h-full object-cover cursor-pointer select-none z-10"
           title="Click or strike any drum zone"
         />
+
+        {/* If Video is Paused by browser */}
+        {isActive && isVideoPaused && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+            <button
+              onClick={resumeVideo}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg"
+            >
+              <Play className="w-4 h-4 fill-white" />
+              <span>Resume Camera Feed</span>
+            </button>
+          </div>
+        )}
 
         {/* Top Floating Guide */}
         <div className="absolute top-1.5 left-1/2 -translate-x-1/2 pointer-events-none px-2.5 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-slate-700/80 flex items-center gap-2 text-[9px] font-mono-code text-slate-300 shadow-md z-20">
