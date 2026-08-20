@@ -181,8 +181,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={{ fontFamily:'monospace', display:'flex', flexDirection:'column', gap:8,
-      background:'#0a0f1e', border:'1px solid #1e293b', borderRadius:12, padding:10 }}>
+    <div style={{ fontFamily:'monospace', display:'flex', flexDirection:'column', gap:6,
+      background:'#0a0f1e', border:'1px solid #1e293b', borderRadius:12, padding:10,
+      height:'100%', boxSizing:'border-box' }}>
 
       {/* HEADER */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
@@ -265,8 +266,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       )}
 
       {/* ── VIEWPORT: pure HTML ── */}
-      <div style={{ position:'relative', width:'100%', aspectRatio:'16/9',
-        minHeight:180, background:'#050810', border:'2px solid #1e293b',
+      <div style={{ position:'relative', width:'100%', flex:1, minHeight:200,
+        background:'#050810', border:'2px solid #1e293b',
         borderRadius:8, overflow:'hidden' }}>
 
         {/* Real video element — always visible, transform mirrors it */}

@@ -815,7 +815,7 @@ export const App: React.FC = () => {
 
         {/* TAB 2: AIR DRUMMING MOTION SENSOR VIEWPORT */}
         {activeTab === 'camera' && (
-          <div style={{ width: '100%', maxWidth: 768, margin: '0 auto', overflowY: 'auto', padding: 4 }}>
+          <div style={{ width:'100%', height:'100%', display:'flex', flexDirection:'column', padding:4, overflow:'hidden' }}>
             <AirDrummingCamera
               onAirStrike={(instrument, hand) => {
                 audioEngine.playInstrument(instrument, 1.0);
