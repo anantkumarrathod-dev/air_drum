@@ -265,8 +265,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       )}
 
       {/* ── VIEWPORT: pure HTML ── */}
-      <div style={{ position:'relative', width:'100%', paddingTop:'56.25%' /* 16:9 */,
-        background:'#050810', border:'2px solid #1e293b', borderRadius:8, overflow:'hidden' }}>
+      <div style={{ position:'relative', width:'100%', aspectRatio:'16/9',
+        minHeight:180, background:'#050810', border:'2px solid #1e293b',
+        borderRadius:8, overflow:'hidden' }}>
 
         {/* Real video element — always visible, transform mirrors it */}
         <video ref={videoRef} autoPlay playsInline muted
