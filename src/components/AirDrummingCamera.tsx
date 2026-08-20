@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { DrumInstrumentId, Hand, Handedness } from '../types/drum';
 import { getInstrumentHand } from '../data/beatLibrary';
+import { Camera, Sparkles, Square, Maximize2, Minimize2, Activity } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
@@ -8,18 +9,27 @@ interface AirDrummingCameraProps {
   invertHands?: boolean;
 }
 
-const ZONES: Array<{
-  id: DrumInstrumentId; label: string; sub: string; type: 'cymbal' | 'drum';
-  x: string; y: string; w: string; h: string;
-}> = [
-  { id: 'crash',        label: 'CRASH',      sub: '16"',   type: 'cymbal', x:'2%',  y:'3%',  w:'22%', h:'28%' },
-  { id: 'high_tom',     label: 'HI TOM',     sub: 'rack',  type: 'drum',   x:'26%', y:'3%',  w:'22%', h:'28%' },
-  { id: 'mid_tom',      label: 'MID TOM',    sub: 'rack',  type: 'drum',   x:'52%', y:'3%',  w:'22%', h:'28%' },
-  { id: 'ride',         label: 'RIDE',       sub: '20"',   type: 'cymbal', x:'76%', y:'3%',  w:'22%', h:'28%' },
-  { id: 'hihat_closed', label: 'HI-HAT',     sub: '14"',   type: 'cymbal', x:'2%',  y:'35%', w:'22%', h:'29%' },
-  { id: 'snare',        label: 'SNARE',      sub: '14"',   type: 'drum',   x:'26%', y:'35%', w:'22%', h:'29%' },
-  { id: 'floor_tom',    label: 'FLOOR TOM',  sub: 'floor', type: 'drum',   x:'76%', y:'35%', w:'22%', h:'29%' },
-  { id: 'bass',         label: 'BASS DRUM',  sub: '22"',   type: 'drum',   x:'33%', y:'67%', w:'34%', h:'30%' },
+interface AirZoneConfig {
+  id: DrumInstrumentId;
+  label: string;
+  sub: string;
+  type: 'cymbal' | 'snare' | 'tom' | 'bass';
+  left: string;
+  top: string;
+  width: string;
+  height: string;
+  iconType: 'crash' | 'ride' | 'hihat' | 'snare' | 'high_tom' | 'mid_tom' | 'floor_tom' | 'bass';
+}
+
+const AIR_ZONES: AirZoneConfig[] = [
+  { id: 'crash',        label: 'CRASH',     sub: '16" Cymbal',   type: 'cymbal', left: '3%',  top: '3%',  width: '21%', height: '28%', iconType: 'crash' },
+  { id: 'high_tom',     label: 'HIGH TOM',  sub: '10" Rack Tom', type: 'tom',    left: '27%', top: '3%',  width: '21%', height: '28%', iconType: 'high_tom' },
+  { id: 'mid_tom',      label: 'MID TOM',   sub: '12" Rack Tom', type: 'tom',    left: '52%', top: '3%',  width: '21%', height: '28%', iconType: 'mid_tom' },
+  { id: 'ride',         label: 'RIDE',      sub: '20" Cymbal',   type: 'cymbal', left: '76%', top: '3%',  width: '21%', height: '28%', iconType: 'ride' },
+  { id: 'hihat_closed', label: 'HI-HAT',    sub: '14" Cymbals',  type: 'cymbal', left: '3%',  top: '35%', width: '21%', height: '30%', iconType: 'hihat' },
+  { id: 'snare',        label: 'SNARE',     sub: '14" Snare',    type: 'snare',  left: '27%', top: '35%', width: '21%', height: '30%', iconType: 'snare' },
+  { id: 'floor_tom',    label: 'FLOOR TOM', sub: '16" Floor',    type: 'tom',    left: '76%', top: '35%', width: '21%', height: '30%', iconType: 'floor_tom' },
+  { id: 'bass',         label: 'BASS DRUM', sub: '22" Kick',     type: 'bass',   left: '32%', top: '68%', width: '36%', height: '29%', iconType: 'bass' },
 ];
 
 export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
@@ -27,396 +37,689 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   handedness = 'RIGHT_HANDED',
   invertHands = false,
 }) => {
-  const [isActive,    setIsActive]    = useState(false);
-  const [isStarting,  setIsStarting]  = useState(false);
-  const [isDemoMode,  setIsDemoMode]  = useState(false);
+  const [isActive, setIsActive] = useState<boolean>(false);
+  const [isStarting, setIsStarting] = useState<boolean>(false);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [showDiag,    setShowDiag]    = useState(false);
-  const [diagLogs,    setDiagLogs]    = useState<string[]>([]);
-  const [sensitivity, setSensitivity] = useState(60);
-  const [flashes,     setFlashes]     = useState<Record<string, boolean>>({});
-  const [motions,     setMotions]     = useState<Record<string, number>>({});
-  const [hits,        setHits]        = useState<Record<string, number>>({});
-  const [fps,         setFps]         = useState(0);
-  const [resolution,  setResolution]  = useState('');
-  const [deviceLabel, setDeviceLabel] = useState('');
+  const [showDiag, setShowDiag] = useState<boolean>(false);
+  const [diagLogs, setDiagLogs] = useState<string[]>([]);
+  const [sensitivity, setSensitivity] = useState<number>(65);
+  const [flashes, setFlashes] = useState<Record<string, boolean>>({});
+  const [motions, setMotions] = useState<Record<string, number>>({});
+  const [hitCounts, setHitCounts] = useState<Record<string, number>>({});
+  const [fps, setFps] = useState<number>(0);
+  const [resolution, setResolution] = useState<string>('');
+  const [deviceLabel, setDeviceLabel] = useState<string>('');
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
-  const videoRef    = useRef<HTMLVideoElement>(null);
-  const procRef     = useRef<HTMLCanvasElement | null>(null);
-  const streamRef   = useRef<MediaStream | null>(null);
-  const prevFrame   = useRef<Uint8ClampedArray | null>(null);
-  const lastHit     = useRef<Record<string, number>>({});
-  const rafRef      = useRef<number>(0);
-  const sensRef     = useRef(sensitivity);
-  const activeRef   = useRef(false);
-  sensRef.current   = sensitivity;
-  activeRef.current = isActive;
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const procRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const prevFrame = useRef<Uint8ClampedArray | null>(null);
+  const lastHit = useRef<Record<string, number>>({});
+  const rafRef = useRef<number>(0);
+  const sensRef = useRef<number>(sensitivity);
+  sensRef.current = sensitivity;
 
-  const log = (msg: string) => {
+  const log = useCallback((msg: string) => {
     const t = new Date().toLocaleTimeString();
-    setDiagLogs(p => [`[${t}] ${msg}`, ...p.slice(0, 29)]);
-  };
+    setDiagLogs((prev) => [`[${t}] ${msg}`, ...prev.slice(0, 39)]);
+  }, []);
 
-  // ── Strike ──────────────────────────────────────────────────────────────────
-  const fireStrike = useCallback((id: DrumInstrumentId) => {
-    const now = performance.now();
-    if (now - (lastHit.current[id] || 0) < 180) return;
-    lastHit.current[id] = now;
-    setFlashes(p => ({ ...p, [id]: true }));
-    setTimeout(() => setFlashes(p => ({ ...p, [id]: false })), 200);
-    setHits(p => ({ ...p, [id]: (p[id] || 0) + 1 }));
-    const hand = getInstrumentHand(id, handedness, invertHands);
-    onAirStrike(id, hand);
-  }, [onAirStrike, handedness, invertHands]);
+  // ── Strike Trigger ──────────────────────────────────────────────────────────
+  const fireStrike = useCallback(
+    (id: DrumInstrumentId) => {
+      const now = performance.now();
+      if (now - (lastHit.current[id] || 0) < 170) return;
+      lastHit.current[id] = now;
 
-  // ── Demo ─────────────────────────────────────────────────────────────────────
+      setFlashes((prev) => ({ ...prev, [id]: true }));
+      setTimeout(() => {
+        setFlashes((prev) => ({ ...prev, [id]: false }));
+      }, 220);
+
+      setHitCounts((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
+
+      const hand = getInstrumentHand(id, handedness, invertHands);
+      onAirStrike(id, hand);
+    },
+    [onAirStrike, handedness, invertHands]
+  );
+
+  // ── Automated Demo Mode Beat Loop ───────────────────────────────────────────
   useEffect(() => {
     if (!isDemoMode) return;
-    const seq: DrumInstrumentId[] = ['hihat_closed','snare','hihat_closed','bass','crash','high_tom','mid_tom','floor_tom'];
-    let i = 0;
-    const t = setInterval(() => fireStrike(seq[i++ % seq.length]), 430);
-    return () => clearInterval(t);
+
+    // Classic dynamic drum groove: Rock 8th Beat
+    const demoSequence: DrumInstrumentId[] = [
+      'hihat_closed', 'bass',
+      'hihat_closed',
+      'hihat_closed', 'snare',
+      'hihat_closed',
+      'hihat_closed', 'bass',
+      'hihat_closed', 'bass',
+      'hihat_closed', 'snare',
+      'crash',        'high_tom',
+      'mid_tom',      'floor_tom',
+    ];
+
+    let step = 0;
+    const interval = setInterval(() => {
+      const currentInst = demoSequence[step % demoSequence.length];
+      fireStrike(currentInst);
+      step++;
+    }, 280);
+
+    return () => clearInterval(interval);
   }, [isDemoMode, fireStrike]);
 
-  // ── Camera ──────────────────────────────────────────────────────────────────
+  // ── Start Webcam Stream ─────────────────────────────────────────────────────
   const startCamera = async () => {
-    setCameraError(null); setIsStarting(true); setIsDemoMode(false);
+    setCameraError(null);
+    setIsStarting(true);
+    setIsDemoMode(false);
     prevFrame.current = null;
-    log('Requesting camera...');
+    log('Requesting camera stream via getUserMedia...');
+
     if (!navigator.mediaDevices?.getUserMedia) {
-      const e = 'Camera API unavailable — needs HTTPS or localhost.';
-      setCameraError(e); setIsStarting(false); return;
+      const err = 'Camera API unavailable in this browser context (requires HTTPS or localhost).';
+      setCameraError(err);
+      log(`ERROR: ${err}`);
+      setIsStarting(false);
+      return;
     }
+
+    const constraintsList: MediaStreamConstraints[] = [
+      { video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false },
+      { video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false },
+      { video: { facingMode: 'user' }, audio: false },
+      { video: true, audio: false },
+    ];
+
     let stream: MediaStream | null = null;
-    for (const c of [
-      { video: { width:{ideal:640}, height:{ideal:480}, facingMode:'user' }, audio:false },
-      { video: { facingMode:'user' }, audio:false },
-      { video: true, audio:false },
-    ] as MediaStreamConstraints[]) {
-      try { stream = await navigator.mediaDevices.getUserMedia(c); if (stream) { log('Stream acquired'); break; } }
-      catch(e) { log('Failed: ' + (e instanceof Error ? e.message : String(e))); }
+    for (const c of constraintsList) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(c);
+        if (stream) {
+          log(`Stream acquired with constraints: ${JSON.stringify(c.video)}`);
+          break;
+        }
+      } catch (err) {
+        log(`Attempt failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
+
     if (!stream) {
-      setCameraError('Camera blocked. Go to browser address bar → click the camera icon → Allow.');
-      setIsStarting(false); return;
+      const err = 'Camera access blocked. Please allow camera permissions in browser address bar.';
+      setCameraError(err);
+      log(`ERROR: ${err}`);
+      setIsStarting(false);
+      return;
     }
+
     streamRef.current = stream;
     const track = stream.getVideoTracks()[0];
-    if (track) { setDeviceLabel(track.label); log('Track: ' + track.label); }
-    const v = videoRef.current!;
-    v.srcObject = stream; v.muted = true; v.playsInline = true;
-    v.onloadedmetadata = () => {
-      v.play().catch(() => {});
-      setResolution(`${v.videoWidth}×${v.videoHeight}`);
-      log(`Video: ${v.videoWidth}×${v.videoHeight}`);
-    };
-    try { await v.play(); } catch(_) {}
-    setIsActive(true); setIsStarting(false);
+    if (track) {
+      setDeviceLabel(track.label || 'Webcam');
+      log(`Active Track: ${track.label}`);
+    }
+
+    const videoEl = videoRef.current;
+    if (videoEl) {
+      videoEl.srcObject = stream;
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      videoEl.onloadedmetadata = () => {
+        videoEl.play().catch(() => {});
+        setResolution(`${videoEl.videoWidth}×${videoEl.videoHeight}`);
+        log(`Camera Live: ${videoEl.videoWidth}×${videoEl.videoHeight}`);
+      };
+      try {
+        await videoEl.play();
+      } catch (_) {}
+    }
+
+    setIsActive(true);
+    setIsStarting(false);
   };
 
+  // ── Stop Camera Stream ──────────────────────────────────────────────────────
   const stopCamera = () => {
     cancelAnimationFrame(rafRef.current);
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
     prevFrame.current = null;
-    setIsActive(false); setIsStarting(false); setIsDemoMode(false);
-    setFps(0); setResolution(''); setMotions({});
+    setIsActive(false);
+    setIsStarting(false);
+    setIsDemoMode(false);
+    setFps(0);
+    setResolution('');
+    setMotions({});
     log('Camera stopped.');
   };
 
-  useEffect(() => () => {
-    cancelAnimationFrame(rafRef.current);
-    streamRef.current?.getTracks().forEach(t => t.stop());
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
   }, []);
 
-  // ── Motion detection loop (runs only when camera active) ────────────────────
+  // ── Real-time Motion Detection Loop ─────────────────────────────────────────
   useEffect(() => {
     if (!isActive) return;
+
     if (!procRef.current) {
       procRef.current = document.createElement('canvas');
-      procRef.current.width = 160; procRef.current.height = 90;
+      procRef.current.width = 160;
+      procRef.current.height = 90;
     }
     const proc = procRef.current;
-    let frames = 0, fpsTimer = performance.now();
+    let frames = 0;
+    let fpsTimer = performance.now();
 
     const loop = () => {
       rafRef.current = requestAnimationFrame(loop);
       const v = videoRef.current;
       if (!v || v.readyState < 2 || v.videoWidth === 0) return;
+
       frames++;
       const now = performance.now();
-      if (now - fpsTimer >= 1000) { setFps(frames); frames = 0; fpsTimer = now; }
+      if (now - fpsTimer >= 1000) {
+        setFps(frames);
+        frames = 0;
+        fpsTimer = now;
+      }
+
       const pCtx = proc.getContext('2d', { willReadFrequently: true });
       if (!pCtx) return;
-      pCtx.save(); pCtx.translate(160,0); pCtx.scale(-1,1);
-      pCtx.drawImage(v, 0, 0, 160, 90); pCtx.restore();
-      const frame = pCtx.getImageData(0,0,160,90).data;
-      const prev  = prevFrame.current;
+
+      // Draw mirrored video to processing canvas
+      pCtx.save();
+      pCtx.translate(160, 0);
+      pCtx.scale(-1, 1);
+      pCtx.drawImage(v, 0, 0, 160, 90);
+      pCtx.restore();
+
+      const frame = pCtx.getImageData(0, 0, 160, 90).data;
+      const prev = prevFrame.current;
+
       if (prev && prev.length === frame.length) {
-        const thr = 80 + (100 - sensRef.current) * 6;
-        const nm: Record<string,number> = {};
-        ZONES.forEach(z => {
-          const x0 = Math.round(parseFloat(z.x)/100*160);
-          const x1 = Math.round((parseFloat(z.x)+parseFloat(z.w))/100*160);
-          const y0 = Math.round(parseFloat(z.y)/100*90);
-          const y1 = Math.round((parseFloat(z.y)+parseFloat(z.h))/100*90);
-          let s = 0;
-          for (let py=y0; py<y1; py+=2)
-            for (let px=x0; px<x1; px+=2) {
-              const i=(py*160+px)*4;
-              const d=Math.abs(frame[i]-prev[i])+Math.abs(frame[i+1]-prev[i+1])+Math.abs(frame[i+2]-prev[i+2]);
-              if (d>20) s+=d;
+        const threshold = 75 + (100 - sensRef.current) * 6;
+        const newMotions: Record<string, number> = {};
+
+        AIR_ZONES.forEach((z) => {
+          const x0 = Math.round((parseFloat(z.left) / 100) * 160);
+          const x1 = Math.round(((parseFloat(z.left) + parseFloat(z.width)) / 100) * 160);
+          const y0 = Math.round((parseFloat(z.top) / 100) * 90);
+          const y1 = Math.round(((parseFloat(z.top) + parseFloat(z.height)) / 100) * 90);
+
+          let diffSum = 0;
+          for (let py = y0; py < y1; py += 2) {
+            for (let px = x0; px < x1; px += 2) {
+              const i = (py * 160 + px) * 4;
+              const d =
+                Math.abs(frame[i] - prev[i]) +
+                Math.abs(frame[i + 1] - prev[i + 1]) +
+                Math.abs(frame[i + 2] - prev[i + 2]);
+              if (d > 22) diffSum += d;
             }
-          nm[z.id] = Math.min(100, Math.round(s/thr*100));
-          if (s >= thr) fireStrike(z.id as DrumInstrumentId);
+          }
+
+          const motionPct = Math.min(100, Math.round((diffSum / threshold) * 100));
+          newMotions[z.id] = motionPct;
+
+          if (diffSum >= threshold) {
+            fireStrike(z.id);
+          }
         });
-        setMotions(nm);
+
+        setMotions(newMotions);
       }
+
       prevFrame.current = new Uint8ClampedArray(frame);
     };
+
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
   }, [isActive, fireStrike]);
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // Fullscreen sync listener
+  useEffect(() => {
+    const handleFS = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', handleFS);
+    return () => document.removeEventListener('fullscreenchange', handleFS);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
+
   return (
     <div
       onContextMenu={(e) => e.preventDefault()}
-      style={{ fontFamily:'monospace', display:'flex', flexDirection:'column', gap:6,
-        background:'#0a0f1e', border:'1px solid #1e293b', borderRadius:12, padding:10,
-        height:'100%', boxSizing:'border-box' }}
+      className="w-full h-full flex-1 flex flex-col min-h-0 bg-[#070b14] rounded-2xl border border-slate-800/90 p-2 sm:p-3 select-none gap-2 shadow-2xl overflow-hidden font-mono-code"
     >
-
-      {/* HEADER */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
-        flexWrap:'wrap', gap:6, borderBottom:'1px solid #1e293b', paddingBottom:8 }}>
-        <div>
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <b style={{ fontSize:14, color:'#fff' }}>🥁 AIR DRUMMING — 8 ZONES</b>
-            {isActive   && <span style={{ fontSize:10, padding:'1px 7px', borderRadius:99, background:'#022c22', border:'1px solid #10b981', color:'#6ee7b7' }}>● LIVE {resolution} · {fps}fps</span>}
-            {isDemoMode && <span style={{ fontSize:10, padding:'1px 7px', borderRadius:99, background:'#3b0764', border:'1px solid #a855f7', color:'#c084fc' }}>✨ DEMO</span>}
-            {!isActive && !isDemoMode && <span style={{ fontSize:10, padding:'1px 7px', borderRadius:99, background:'#1e293b', border:'1px solid #334155', color:'#64748b' }}>STANDBY</span>}
+      {/* ── TOP CONTROL BAR ── */}
+      <div className="shrink-0 flex items-center justify-between flex-wrap gap-2 bg-[#0c1222] border border-slate-800 rounded-xl px-3 py-2">
+        {/* Left: Title & Status Badge */}
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 via-emerald-400 to-amber-400 p-0.5 flex items-center justify-center shadow-sm">
+            <div className="w-full h-full bg-[#090e1a] rounded-[6px] flex items-center justify-center">
+              <Camera className="w-4 h-4 text-cyan-400" />
+            </div>
           </div>
-          {deviceLabel && <div style={{ fontSize:10, color:'#475569', marginTop:2 }}>📷 {deviceLabel}</div>}
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="font-display font-black text-xs sm:text-sm text-white tracking-wide">
+                8-ZONE AIR DRUMMING
+              </h2>
+              {isActive && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950/90 text-emerald-300 border border-emerald-500/50 flex items-center gap-1 shadow-[0_0_8px_rgba(16,185,129,0.4)]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  LIVE {resolution} • {fps} FPS
+                </span>
+              )}
+              {isDemoMode && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-950/90 text-purple-300 border border-purple-500/50 flex items-center gap-1 animate-pulse shadow-[0_0_8px_rgba(168,85,247,0.4)]">
+                  <Sparkles className="w-3 h-3 text-purple-400" />
+                  DEMO BEAT ACTIVE
+                </span>
+              )}
+              {!isActive && !isDemoMode && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800/80 text-slate-400 border border-slate-700">
+                  STANDBY
+                </span>
+              )}
+            </div>
+            {deviceLabel && <p className="text-[10px] text-slate-400 mt-0.5 truncate max-w-[200px] sm:max-w-none">📷 {deviceLabel}</p>}
+          </div>
         </div>
-        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-          <button onClick={() => { if(isActive) stopCamera(); setIsDemoMode(p=>!p); }}
-            style={{ padding:'5px 12px', borderRadius:6, border:'1px solid #7c3aed',
-              background:isDemoMode?'#7c3aed':'transparent', color:isDemoMode?'#fff':'#c084fc',
-              fontWeight:700, fontSize:11, cursor:'pointer' }}>
-            ✨ {isDemoMode ? 'STOP DEMO' : 'DEMO MODE'}
-          </button>
-          {isActive
-            ? <button onClick={stopCamera}
-                style={{ padding:'5px 12px', borderRadius:6, border:'1px solid #ef4444',
-                  background:'#450a0a', color:'#fca5a5', fontWeight:700, fontSize:11, cursor:'pointer' }}>
-                ⏹ STOP CAMERA
-              </button>
-            : <button onClick={startCamera} disabled={isStarting}
-                style={{ padding:'5px 14px', borderRadius:6, border:'none',
-                  background:isStarting?'#374151':'linear-gradient(90deg,#059669,#0d9488)',
-                  color:'#fff', fontWeight:900, fontSize:11, cursor:isStarting?'not-allowed':'pointer' }}>
-                {isStarting ? '⏳ STARTING...' : '📷 START CAMERA'}
-              </button>}
-          <button onClick={() => {
-              if (!document.fullscreenElement) {
-                document.documentElement.requestFullscreen().catch(() => {});
-              } else {
-                document.exitFullscreen().catch(() => {});
-              }
+
+        {/* Right: Master Buttons */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Demo Mode Button */}
+          <button
+            onClick={() => {
+              if (isActive) stopCamera();
+              setIsDemoMode((prev) => !prev);
             }}
-            style={{ padding:'5px 10px', borderRadius:6, border:'1px solid #06b6d4',
-              background:'rgba(6,182,212,0.15)', color:'#67e8f9', fontWeight:700, fontSize:11, cursor:'pointer' }}>
-            ⛶ FULLSCREEN
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-display font-bold text-xs transition-all shadow-md ${
+              isDemoMode
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_12px_rgba(147,51,234,0.6)] scale-105'
+                : 'bg-purple-950/50 hover:bg-purple-900/60 text-purple-300 border border-purple-500/50'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>{isDemoMode ? 'STOP DEMO' : 'DEMO MODE'}</span>
           </button>
-          <button onClick={() => setShowDiag(p=>!p)}
-            style={{ padding:'5px 10px', borderRadius:6,
-              border:`1px solid ${showDiag?'#f59e0b':'#334155'}`,
-              background:showDiag?'#451a03':'transparent',
-              color:showDiag?'#fcd34d':'#94a3b8', fontSize:11, cursor:'pointer' }}>
-            🔍 LOGS
+
+          {/* Camera Start / Stop Button */}
+          {isActive ? (
+            <button
+              onClick={stopCamera}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-display font-bold text-xs bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-500/50 transition-all shadow-md"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              <span>STOP CAMERA</span>
+            </button>
+          ) : (
+            <button
+              onClick={startCamera}
+              disabled={isStarting}
+              className={`flex items-center gap-1.5 px-4 py-1.5 rounded-xl font-display font-bold text-xs transition-all shadow-md ${
+                isStarting
+                  ? 'bg-slate-800 text-slate-400 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-black font-black shadow-[0_0_12px_rgba(16,185,129,0.5)] hover:scale-105'
+              }`}
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span>{isStarting ? 'STARTING...' : 'START CAMERA'}</span>
+            </button>
+          )}
+
+          {/* Fullscreen Toggle */}
+          <button
+            onClick={toggleFullscreen}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 text-xs font-bold"
+            title="Toggle Fullscreen Mode"
+          >
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+          </button>
+
+          {/* Diagnostics Logs Button */}
+          <button
+            onClick={() => setShowDiag((prev) => !prev)}
+            className={`p-1.5 rounded-xl border text-xs font-bold transition-all ${
+              showDiag
+                ? 'bg-amber-950/80 border-amber-500/70 text-amber-300'
+                : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white'
+            }`}
+            title="Toggle System Diagnostics & Event Logs"
+          >
+            <Activity className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* ERROR */}
+      {/* ── ERROR NOTICE BANNER ── */}
       {cameraError && (
-        <div style={{ padding:10, borderRadius:8, background:'#450a0a', border:'1px solid #ef4444',
-          color:'#fca5a5', fontSize:11 }}>
-          ⚠️ {cameraError}
-          <div style={{ marginTop:8, display:'flex', gap:8 }}>
-            <button onClick={startCamera}
-              style={{ padding:'3px 10px', borderRadius:4, background:'#7f1d1d', color:'#fff',
-                border:'none', cursor:'pointer', fontSize:11, fontWeight:700 }}>🔄 Retry</button>
-            <button onClick={() => { setCameraError(null); setIsDemoMode(true); }}
-              style={{ padding:'3px 10px', borderRadius:4, background:'#3b0764', color:'#c084fc',
-                border:'none', cursor:'pointer', fontSize:11, fontWeight:700 }}>✨ Try Demo</button>
+        <div className="shrink-0 p-3 rounded-xl bg-red-950/90 border border-red-500 text-red-200 text-xs flex items-center justify-between gap-2 shadow-lg animate-in fade-in">
+          <span>⚠️ {cameraError}</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={startCamera}
+              className="px-3 py-1 rounded-lg bg-red-800 hover:bg-red-700 text-white font-bold text-xs"
+            >
+              🔄 Retry Camera
+            </button>
+            <button
+              onClick={() => {
+                setCameraError(null);
+                setIsDemoMode(true);
+              }}
+              className="px-3 py-1 rounded-lg bg-purple-900 hover:bg-purple-800 text-purple-200 font-bold text-xs"
+            >
+              ✨ Try Demo Mode
+            </button>
           </div>
         </div>
       )}
 
-      {/* DIAGNOSTICS */}
+      {/* ── DIAGNOSTICS CONSOLE DRAWER ── */}
       {showDiag && (
-        <div style={{ padding:8, background:'#000', border:'1px solid #f59e0b66',
-          borderRadius:8, fontSize:10, color:'#fcd34d' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
-            <b>🔍 CAMERA DIAGNOSTICS</b>
-            <div style={{ display:'flex', gap:10 }}>
-              <button onClick={()=>setDiagLogs([])} style={{ background:'none',border:'none',color:'#94a3b8',cursor:'pointer',fontSize:10 }}>Clear</button>
-              <button onClick={()=>setShowDiag(false)} style={{ background:'none',border:'none',color:'#fcd34d',cursor:'pointer',fontWeight:700 }}>✕</button>
+        <div className="shrink-0 p-3 rounded-xl bg-black/90 border border-amber-500/50 text-amber-300 text-xs shadow-xl animate-in slide-in-from-top-2">
+          <div className="flex items-center justify-between border-b border-amber-500/30 pb-1.5 mb-2 font-bold">
+            <span className="flex items-center gap-1.5">
+              <Activity className="w-4 h-4 text-amber-400" /> SYSTEM DIAGNOSTICS
+            </span>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setDiagLogs([])} className="text-slate-400 hover:text-white text-[10px]">
+                Clear Logs
+              </button>
+              <button onClick={() => setShowDiag(false)} className="text-amber-400 hover:text-white font-bold">
+                ✕
+              </button>
             </div>
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:4, fontSize:9, color:'#cbd5e1', marginBottom:6 }}>
-            <span>HTTPS: <b style={{color:window.isSecureContext?'#34d399':'#f87171'}}>{window.isSecureContext?'YES ✓':'NO ✗'}</b></span>
-            <span>Camera API: <b style={{color:navigator.mediaDevices?'#34d399':'#f87171'}}>{navigator.mediaDevices?'OK ✓':'MISSING ✗'}</b></span>
-            <span>State: <b style={{color:'#fff'}}>{isActive?'ACTIVE':'IDLE'}</b></span>
-            <span>Resolution: <b style={{color:'#fff'}}>{resolution||'N/A'}</b></span>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] text-slate-300 mb-2">
+            <div>HTTPS Secure Context: <b className={window.isSecureContext ? 'text-emerald-400' : 'text-red-400'}>{window.isSecureContext ? 'YES ✓' : 'NO ✗'}</b></div>
+            <div>MediaDevices API: <b className={navigator.mediaDevices ? 'text-emerald-400' : 'text-red-400'}>{navigator.mediaDevices ? 'AVAILABLE ✓' : 'MISSING ✗'}</b></div>
+            <div>Camera State: <b className="text-white">{isActive ? 'ACTIVE (STREAMING)' : 'OFF / STANDBY'}</b></div>
+            <div>Resolution: <b className="text-white">{resolution || 'N/A'}</b></div>
           </div>
-          <div style={{ maxHeight:80, overflowY:'auto', background:'#0f172a', padding:4, borderRadius:4, color:'#94a3b8', fontSize:9 }}>
-            {diagLogs.length===0 ? 'No logs yet.' : diagLogs.map((l,i)=><div key={i}>{l}</div>)}
+          <div className="max-h-24 overflow-y-auto bg-slate-950 p-2 rounded-lg text-[10px] text-slate-400 space-y-0.5">
+            {diagLogs.length === 0 ? <p>No events logged yet. Click START CAMERA or DEMO MODE.</p> : diagLogs.map((l, i) => <div key={i}>{l}</div>)}
           </div>
         </div>
       )}
 
-      {/* ── VIEWPORT: pure HTML ── */}
-      <div style={{ position:'relative', width:'100%', flex:1, minHeight:200,
-        background:'#050810', border:'2px solid #1e293b',
-        borderRadius:8, overflow:'hidden' }}>
+      {/* ── 8-ZONE DRUM SKELETON & VIDEO VIEWPORT ── */}
+      <div className="relative w-full flex-1 min-h-[300px] sm:min-h-[400px] rounded-2xl border-2 border-slate-800 bg-[#03060f] overflow-hidden shadow-inner flex items-center justify-center">
+        {/* Live Camera Video Feed (Mirrored) */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`absolute inset-0 w-full h-full object-cover scale-x-[-1] transition-opacity duration-500 z-0 ${
+            isActive ? 'opacity-90' : 'opacity-0'
+          }`}
+        />
 
-        {/* Real video element — always visible, transform mirrors it */}
-        <video ref={videoRef} autoPlay playsInline muted
-          style={{ position:'absolute', inset:0, width:'100%', height:'100%',
-            objectFit:'cover', transform:'scaleX(-1)',
-            opacity: isActive ? 1 : 0, transition:'opacity 0.3s' }} />
+        {/* Ambient Drum Stage Lighting Background (Shown when camera is in standby or transparent overlay) */}
+        <div
+          className={`absolute inset-0 pointer-events-none transition-opacity duration-300 z-0 ${
+            isActive ? 'opacity-20 bg-gradient-to-t from-black via-transparent to-black' : 'opacity-100'
+          }`}
+          style={{
+            background: 'radial-gradient(circle at 50% 40%, #0d1e38 0%, #060b18 60%, #02040a 100%)',
+          }}
+        >
+          {/* Subtle Isometric Grid Lines */}
+          <div
+            className="absolute inset-0 opacity-15"
+            style={{
+              backgroundImage: 'linear-gradient(rgba(0,229,255,0.2) 1px, transparent 1px), linear-gradient(90deg, rgba(0,229,255,0.2) 1px, transparent 1px)',
+              backgroundSize: '48px 48px',
+            }}
+          />
+        </div>
 
-        {/* Dark overlay tint when camera is off so zones pop */}
-        {!isActive && (
-          <div style={{ position:'absolute', inset:0, background:'#060b18' }} />
-        )}
+        {/* Top Legend Bar */}
+        <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1 rounded-full bg-black/80 border border-slate-700/80 backdrop-blur-md shadow-lg flex items-center gap-3 text-[10px] font-bold">
+          <span className="text-cyan-400 flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#00E5FF]" />
+            LEFT HAND (LH)
+          </span>
+          <span className="text-slate-500">|</span>
+          <span className="text-orange-400 flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-orange-400 shadow-[0_0_8px_#FF6D00]" />
+            RIGHT HAND (RH)
+          </span>
+        </div>
 
-        {/* Grid lines (CSS only, no canvas) */}
-        {!isActive && (
-          <div style={{ position:'absolute', inset:0, 
-            backgroundImage:'linear-gradient(rgba(255,255,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.04) 1px,transparent 1px)',
-            backgroundSize:'40px 40px' }} />
-        )}
-
-        {/* 8 ZONE DIVS — always visible */}
-        {ZONES.map(z => {
-          const hand    = getInstrumentHand(z.id, handedness, invertHands);
+        {/* ── 8 GLOWING DRUM SKELETON ZONES ── */}
+        {AIR_ZONES.map((zone) => {
+          const hand = getInstrumentHand(zone.id, handedness, invertHands);
           const isRight = hand === 'RIGHT';
-          const col     = isRight ? '#FF6D00' : '#00E5FF';
-          const flash   = flashes[z.id];
-          const motion  = motions[z.id] || 0;
+          const primaryColor = isRight ? '#FF6D00' : '#00E5FF';
+          const isFlashing = Boolean(flashes[zone.id]);
+          const motionValue = motions[zone.id] || 0;
+          const hits = hitCounts[zone.id] || 0;
+
           return (
             <div
-              key={z.id}
-              onClick={() => fireStrike(z.id)}
+              key={zone.id}
+              onClick={() => fireStrike(zone.id)}
               style={{
-                position:'absolute',
-                left:z.x, top:z.y, width:z.w, height:z.h,
-                boxSizing:'border-box',
-                border:`${flash?4:2}px solid ${flash?'#fff':col}`,
-                background: flash ? col+'99' : isActive ? col+'28' : col+'18',
-                cursor:'pointer',
-                display:'flex', flexDirection:'column',
-                alignItems:'flex-start', justifyContent:'flex-start',
-                padding:'4px 6px',
-                transition:'background 0.1s, border 0.1s',
-                userSelect:'none',
+                position: 'absolute',
+                left: zone.left,
+                top: zone.top,
+                width: zone.width,
+                height: zone.height,
               }}
+              className={`cursor-pointer rounded-2xl transition-all duration-100 flex flex-col items-center justify-between p-2 select-none group z-10 ${
+                isFlashing
+                  ? 'scale-105 shadow-[0_0_40px_rgba(255,255,255,0.9)] ring-4 ring-white'
+                  : 'hover:scale-[1.02] shadow-[0_4px_20px_rgba(0,0,0,0.6)]'
+              }`}
             >
-              {/* Corner bracket TL */}
-              <div style={{ position:'absolute', top:0, left:0, width:10, height:10,
-                borderTop:`3px solid ${flash?'#fff':col}`, borderLeft:`3px solid ${flash?'#fff':col}` }} />
-              {/* Corner bracket TR */}
-              <div style={{ position:'absolute', top:0, right:0, width:10, height:10,
-                borderTop:`3px solid ${flash?'#fff':col}`, borderRight:`3px solid ${flash?'#fff':col}` }} />
-              {/* Corner bracket BL */}
-              <div style={{ position:'absolute', bottom:0, left:0, width:10, height:10,
-                borderBottom:`3px solid ${flash?'#fff':col}`, borderLeft:`3px solid ${flash?'#fff':col}` }} />
-              {/* Corner bracket BR */}
-              <div style={{ position:'absolute', bottom:0, right:0, width:10, height:10,
-                borderBottom:`3px solid ${flash?'#fff':col}`, borderRight:`3px solid ${flash?'#fff':col}` }} />
+              {/* Outer Glowing Skeleton Boundary */}
+              <div
+                className="absolute inset-0 rounded-2xl transition-all duration-100"
+                style={{
+                  border: isFlashing
+                    ? '3px solid #ffffff'
+                    : `2px solid ${primaryColor}`,
+                  background: isFlashing
+                    ? 'rgba(255,255,255,0.35)'
+                    : isRight
+                    ? 'radial-gradient(circle, rgba(255,109,0,0.22) 0%, rgba(255,109,0,0.08) 70%, rgba(0,0,0,0.4) 100%)'
+                    : 'radial-gradient(circle, rgba(0,229,255,0.22) 0%, rgba(0,229,255,0.08) 70%, rgba(0,0,0,0.4) 100%)',
+                  boxShadow: isFlashing
+                    ? 'inset 0 0 30px #ffffff, 0 0 30px #ffffff'
+                    : `inset 0 0 15px ${isRight ? 'rgba(255,109,0,0.3)' : 'rgba(0,229,255,0.3)'}, 0 0 12px ${isRight ? 'rgba(255,109,0,0.4)' : 'rgba(0,229,255,0.4)'}`,
+                }}
+              />
 
-              {/* Labels */}
-              <span style={{ fontSize:10, fontWeight:700, color: flash?'#fff':col, lineHeight:1.2, zIndex:1 }}>{z.label}</span>
-              <span style={{ fontSize:8, color:'rgba(255,255,255,0.6)', zIndex:1 }}>{isRight?'RH':'LH'} · {z.sub}</span>
+              {/* Four Corner Target Brackets */}
+              <div
+                className="absolute top-1 left-1 w-3 h-3 border-t-2 border-l-2 pointer-events-none transition-colors"
+                style={{ borderColor: isFlashing ? '#ffffff' : primaryColor }}
+              />
+              <div
+                className="absolute top-1 right-1 w-3 h-3 border-t-2 border-r-2 pointer-events-none transition-colors"
+                style={{ borderColor: isFlashing ? '#ffffff' : primaryColor }}
+              />
+              <div
+                className="absolute bottom-1 left-1 w-3 h-3 border-b-2 border-l-2 pointer-events-none transition-colors"
+                style={{ borderColor: isFlashing ? '#ffffff' : primaryColor }}
+              />
+              <div
+                className="absolute bottom-1 right-1 w-3 h-3 border-b-2 border-r-2 pointer-events-none transition-colors"
+                style={{ borderColor: isFlashing ? '#ffffff' : primaryColor }}
+              />
 
-              {/* Motion bar */}
-              {isActive && (
-                <div style={{ position:'absolute', bottom:4, left:6, right:6, height:3,
-                  background:'rgba(255,255,255,0.1)', borderRadius:2, overflow:'hidden' }}>
-                  <div style={{ width:`${motion}%`, height:'100%', background:col,
-                    transition:'width 80ms', borderRadius:2 }} />
+              {/* Top Tag Header: Label + Hand Badge */}
+              <div className="w-full flex items-center justify-between z-10 pointer-events-none px-1">
+                <span
+                  className="font-display font-black text-[11px] sm:text-xs tracking-wider"
+                  style={{
+                    color: isFlashing ? '#ffffff' : primaryColor,
+                    textShadow: `0 0 8px ${primaryColor}`,
+                  }}
+                >
+                  {zone.label}
+                </span>
+
+                <span
+                  className="text-[9px] font-bold px-1.5 py-0.2 rounded-full border shadow-sm"
+                  style={{
+                    backgroundColor: isRight ? '#431407' : '#083344',
+                    borderColor: primaryColor,
+                    color: isRight ? '#fdba74' : '#67e8f9',
+                  }}
+                >
+                  {isRight ? 'RH' : 'LH'}
+                </span>
+              </div>
+
+              {/* Center Authentic Drum / Cymbal Skeleton Graphic */}
+              <div className="relative flex-1 w-full flex items-center justify-center pointer-events-none z-10">
+                {zone.type === 'cymbal' ? (
+                  // Cymbal Concentric Rings Skeleton
+                  <div
+                    className="w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center transition-all duration-75 relative"
+                    style={{
+                      border: `2px solid ${isFlashing ? '#ffffff' : primaryColor}`,
+                      background: isFlashing
+                        ? 'radial-gradient(circle, #ffffff 0%, #fef08a 50%, #eab308 100%)'
+                        : 'radial-gradient(circle, rgba(254,240,138,0.2) 0%, rgba(234,179,8,0.15) 50%, rgba(120,53,15,0.25) 100%)',
+                      boxShadow: isFlashing ? '0 0 25px #ffffff' : `0 0 12px ${primaryColor}`,
+                    }}
+                  >
+                    <div className="w-10 h-10 rounded-full border border-amber-500/40" />
+                    <div className="w-4 h-4 rounded-full bg-amber-400/80 shadow-sm" />
+                  </div>
+                ) : (
+                  // Drum Head & Shell Skeleton
+                  <div
+                    className={`rounded-full flex items-center justify-center transition-all duration-75 relative ${
+                      zone.type === 'bass' ? 'w-20 h-20 sm:w-24 sm:h-24' : 'w-16 h-16 sm:w-20 sm:h-20'
+                    }`}
+                    style={{
+                      border: `2px solid ${isFlashing ? '#ffffff' : primaryColor}`,
+                      background: isFlashing
+                        ? 'radial-gradient(circle, #ffffff 0%, #e2e8f0 70%, #94a3b8 100%)'
+                        : isRight
+                        ? 'radial-gradient(circle, rgba(255,255,255,0.15) 0%, rgba(255,109,0,0.15) 60%, rgba(15,23,42,0.4) 100%)'
+                        : 'radial-gradient(circle, rgba(255,255,255,0.15) 0%, rgba(0,229,255,0.15) 60%, rgba(15,23,42,0.4) 100%)',
+                      boxShadow: isFlashing ? '0 0 25px #ffffff' : `0 0 12px ${primaryColor}`,
+                    }}
+                  >
+                    {/* Concentric Rim & Center Dot */}
+                    <div className="w-10 h-10 rounded-full border border-white/20" />
+                    <div
+                      className="w-3.5 h-3.5 rounded-full"
+                      style={{ backgroundColor: isFlashing ? '#ffffff' : primaryColor }}
+                    />
+                  </div>
+                )}
+
+                {/* Hit Ripple Wave on Strike */}
+                {isFlashing && (
+                  <div className="absolute inset-0 rounded-full border-2 border-white animate-ping opacity-80 pointer-events-none" />
+                )}
+              </div>
+
+              {/* Bottom Info: Subtitle & Motion Level Bar */}
+              <div className="w-full flex flex-col gap-1 z-10 pointer-events-none">
+                <div className="flex items-center justify-between text-[9px] text-slate-400 px-1">
+                  <span>{zone.sub}</span>
+                  {hits > 0 && <span className="font-bold text-white bg-slate-800 px-1.5 rounded">{hits} hits</span>}
                 </div>
-              )}
 
-              {/* Hit count badge */}
-              {(hits[z.id]||0) > 0 && (
-                <div style={{ position:'absolute', top:3, right:4, background:col,
-                  color:'#000', fontSize:8, fontWeight:700, padding:'1px 4px', borderRadius:3 }}>
-                  {hits[z.id]}×
-                </div>
-              )}
+                {/* Real-time Optical Flow Motion Meter Bar */}
+                {isActive && (
+                  <div className="w-full h-1.5 bg-slate-900/90 rounded-full overflow-hidden border border-slate-700/60">
+                    <div
+                      className="h-full rounded-full transition-all duration-75"
+                      style={{
+                        width: `${motionValue}%`,
+                        backgroundColor: isFlashing ? '#ffffff' : primaryColor,
+                        boxShadow: `0 0 6px ${primaryColor}`,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
           );
         })}
 
-        {/* Standby prompt */}
+        {/* Bottom Standby Guide Prompt */}
         {!isActive && !isDemoMode && (
-          <div style={{ position:'absolute', bottom:10, left:'50%', transform:'translateX(-50%)',
-            background:'rgba(0,0,0,0.75)', border:'1px solid #334155', borderRadius:6,
-            padding:'4px 14px', color:'#64748b', fontSize:10, whiteSpace:'nowrap' }}>
-            Click any zone · START CAMERA for motion · DEMO MODE to preview
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 px-4 py-1.5 rounded-xl bg-black/85 border border-slate-700 text-slate-300 text-[11px] font-bold backdrop-blur-md shadow-xl flex items-center gap-2">
+            <span>✨ Click any zone to play directly</span>
+            <span className="text-slate-600">•</span>
+            <span className="text-emerald-400">Click START CAMERA for air motion</span>
+            <span className="text-slate-600">•</span>
+            <span className="text-purple-400">Click DEMO MODE for preview</span>
           </div>
         )}
-
-        {/* Legend */}
-        <div style={{ position:'absolute', top:6, left:'50%', transform:'translateX(-50%)',
-          background:'rgba(0,0,0,0.7)', border:'1px solid #1e293b', borderRadius:99,
-          padding:'2px 12px', display:'flex', gap:8, fontSize:9, whiteSpace:'nowrap' }}>
-          <span style={{ color:'#67e8f9' }}>● CYAN = LEFT HAND</span>
-          <span style={{ color:'#475569' }}>|</span>
-          <span style={{ color:'#fb923c' }}>● ORANGE = RIGHT HAND</span>
-        </div>
       </div>
 
-      {/* 8-ZONE BUTTON ROW */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:4 }}>
-        {ZONES.map(z => {
-          const hand    = getInstrumentHand(z.id, handedness, invertHands);
-          const isRight = hand === 'RIGHT';
-          const col     = isRight ? '#FF6D00' : '#00E5FF';
-          const flash   = flashes[z.id];
-          return (
-            <button key={z.id} onClick={() => fireStrike(z.id)}
-              style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2,
-                padding:'5px 2px', borderRadius:6, cursor:'pointer',
-                border:`1px solid ${flash?col+'ff':col+'55'}`,
-                background:flash?col+'33':'transparent',
-                color:col, fontFamily:'monospace', fontSize:9 }}>
-              <b>{z.label}</b>
-              <span style={{ opacity:0.6 }}>{isRight?'RH':'LH'}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* SENSITIVITY */}
-      <div style={{ background:'#0f172a', border:'1px solid #1e293b', borderRadius:8, padding:8 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', fontSize:10, color:'#94a3b8', marginBottom:4 }}>
-          <span>🎚 MOTION SENSITIVITY</span>
-          <b style={{ color:'#22d3ee' }}>{sensitivity}%</b>
+      {/* ── SENSITIVITY CONTROLS & BOTTOM 8-PAD QUICK BAR ── */}
+      <div className="shrink-0 flex items-center justify-between gap-3 bg-[#0c1222] border border-slate-800 rounded-xl px-3 py-2 flex-wrap">
+        {/* Left: Sensitivity Slider */}
+        <div className="flex items-center gap-3 flex-1 min-w-[240px]">
+          <span className="text-[11px] font-bold text-slate-400 whitespace-nowrap">
+            🎚 MOTION SENSITIVITY:
+          </span>
+          <input
+            type="range"
+            min={20}
+            max={90}
+            value={sensitivity}
+            onChange={(e) => setSensitivity(Number(e.target.value))}
+            className="flex-1 accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+          />
+          <span className="text-xs font-bold text-cyan-400 w-10 text-right">{sensitivity}%</span>
         </div>
-        <input type="range" min={20} max={90} value={sensitivity}
-          onChange={e => { setSensitivity(+e.target.value); sensRef.current = +e.target.value; }}
-          style={{ width:'100%', accentColor:'#22d3ee', cursor:'pointer' }} />
-        <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#475569', marginTop:4 }}>
-          <button onClick={()=>setSensitivity(40)} style={{ background:'none',border:'none',color:'#475569',cursor:'pointer',fontSize:9 }}>Low (40%)</button>
-          <button onClick={()=>setSensitivity(60)} style={{ background:'none',border:'none',color:'#fbbf24',cursor:'pointer',fontSize:9,fontWeight:700 }}>Default (60%)</button>
-          <button onClick={()=>setSensitivity(80)} style={{ background:'none',border:'none',color:'#475569',cursor:'pointer',fontSize:9 }}>High (80%)</button>
+
+        {/* Right: Quick Preset Buttons */}
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setSensitivity(45)}
+            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-bold"
+          >
+            Low (45%)
+          </button>
+          <button
+            onClick={() => setSensitivity(65)}
+            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 text-[10px] font-bold border border-amber-500/30"
+          >
+            Default (65%)
+          </button>
+          <button
+            onClick={() => setSensitivity(85)}
+            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-bold"
+          >
+            High (85%)
+          </button>
         </div>
       </div>
     </div>
