@@ -161,11 +161,20 @@ export const App: React.FC = () => {
       setIsFullscreen(Boolean(document.fullscreenElement));
     };
 
+    const handleContextMenu = (e: MouseEvent) => {
+      // Strictly prevent right-click context menu in any fullscreen mode or document-level fullscreen
+      if (Boolean(document.fullscreenElement) || isFullscreen) {
+        e.preventDefault();
+      }
+    };
+
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    window.addEventListener('contextmenu', handleContextMenu);
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('contextmenu', handleContextMenu);
     };
-  }, []);
+  }, [isFullscreen]);
 
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {

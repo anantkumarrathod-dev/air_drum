@@ -211,9 +211,14 @@ export const DrumKitVisualizer: React.FC<DrumKitVisualizerProps> = ({
   };
 
   // Dedicated Render Body for Kit Elements (Authentic Drummer's Cockpit Perspective with Lowest Bass Drum)
-  const renderKitBody = (scale: number = 1.0) => (
+  const renderKitBody = (scale: number = 1.0, isFullscreenView: boolean = false) => (
     <div
-      className={`relative w-full max-w-[540px] aspect-[16/11] sm:aspect-[16/10] mx-auto select-none transition-transform duration-300 my-auto ${
+      onContextMenu={(e) => e.preventDefault()}
+      className={`relative w-full ${
+        isFullscreenView
+          ? 'max-w-5xl aspect-[16/10] sm:aspect-[16/9]'
+          : 'max-w-[540px] aspect-[16/11] sm:aspect-[16/10]'
+      } mx-auto select-none transition-transform duration-300 my-auto ${
         isLefty ? 'scale-x-[-1]' : ''
       }`}
     >
@@ -270,7 +275,10 @@ export const DrumKitVisualizer: React.FC<DrumKitVisualizerProps> = ({
     <>
       {/* 1. DEDICATED FULLSCREEN DRUM KIT MODAL / SOLO STAGE OVERLAY */}
       {isKitSoloFullscreen && (
-        <div className="fixed inset-0 z-50 bg-[#060a14] flex flex-col items-center justify-between p-4 sm:p-8 animate-in fade-in duration-150 overflow-y-auto">
+        <div
+          onContextMenu={(e) => e.preventDefault()}
+          className="fixed inset-0 z-50 bg-[#060a14] flex flex-col items-center justify-between p-4 sm:p-8 animate-in fade-in duration-150 overflow-y-auto"
+        >
           {/* Top Stage Control Header */}
           <div className="w-full max-w-6xl flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-3 bg-slate-900/60 p-4 rounded-2xl backdrop-blur-md">
             <div className="flex items-center gap-3">
@@ -356,8 +364,8 @@ export const DrumKitVisualizer: React.FC<DrumKitVisualizerProps> = ({
           </div>
 
           {/* Massive Centered Realistic Drum Set */}
-          <div className="my-auto py-6 w-full flex justify-center">
-            {renderKitBody(1.3)}
+          <div className="my-auto py-8 w-full flex-1 flex items-center justify-center">
+            {renderKitBody(1.75, true)}
           </div>
         </div>
       )}

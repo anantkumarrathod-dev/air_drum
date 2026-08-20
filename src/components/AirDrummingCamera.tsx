@@ -181,9 +181,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={{ fontFamily:'monospace', display:'flex', flexDirection:'column', gap:6,
-      background:'#0a0f1e', border:'1px solid #1e293b', borderRadius:12, padding:10,
-      height:'100%', boxSizing:'border-box' }}>
+    <div
+      onContextMenu={(e) => e.preventDefault()}
+      style={{ fontFamily:'monospace', display:'flex', flexDirection:'column', gap:6,
+        background:'#0a0f1e', border:'1px solid #1e293b', borderRadius:12, padding:10,
+        height:'100%', boxSizing:'border-box' }}
+    >
 
       {/* HEADER */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
@@ -216,6 +219,17 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                   color:'#fff', fontWeight:900, fontSize:11, cursor:isStarting?'not-allowed':'pointer' }}>
                 {isStarting ? '⏳ STARTING...' : '📷 START CAMERA'}
               </button>}
+          <button onClick={() => {
+              if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(() => {});
+              } else {
+                document.exitFullscreen().catch(() => {});
+              }
+            }}
+            style={{ padding:'5px 10px', borderRadius:6, border:'1px solid #06b6d4',
+              background:'rgba(6,182,212,0.15)', color:'#67e8f9', fontWeight:700, fontSize:11, cursor:'pointer' }}>
+            ⛶ FULLSCREEN
+          </button>
           <button onClick={() => setShowDiag(p=>!p)}
             style={{ padding:'5px 10px', borderRadius:6,
               border:`1px solid ${showDiag?'#f59e0b':'#334155'}`,
