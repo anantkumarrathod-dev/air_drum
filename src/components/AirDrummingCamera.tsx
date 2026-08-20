@@ -1,7 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Hand, Handedness, DrumInstrumentId } from '../types/drum';
+import { DrumInstrumentId, Hand, Handedness } from '../types/drum';
 import { getInstrumentHand } from '../data/beatLibrary';
-import { Camera, CameraOff, Video, Sliders, Hand as HandIcon, AlertCircle, RefreshCw, CheckCircle2, Play, Info, Sparkles, HelpCircle } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
@@ -9,32 +8,21 @@ interface AirDrummingCameraProps {
   invertHands?: boolean;
 }
 
-interface AirZoneDef {
+// ── 8 Air Drum Zones (normalized 0..1 coords) ──────────────────────────────
+const ZONES: Array<{
   id: DrumInstrumentId;
-  name: string;
-  shortName: string;
+  label: string;
   type: 'cymbal' | 'drum';
-  xRatio: number;
-  yRatio: number;
-  wRatio: number;
-  hRatio: number;
-}
-
-// 8 Discrete Drum Zones in 3D Air Space
-const AIR_ZONES: AirZoneDef[] = [
-  // Top Row: Cymbals & Rack Toms
-  { id: 'crash', name: 'CRASH CYMBAL', shortName: 'CRASH 16"', type: 'cymbal', xRatio: 0.02, yRatio: 0.03, wRatio: 0.22, hRatio: 0.28 },
-  { id: 'high_tom', name: 'HIGH TOM', shortName: 'HIGH TOM', type: 'drum', xRatio: 0.26, yRatio: 0.03, wRatio: 0.22, hRatio: 0.28 },
-  { id: 'mid_tom', name: 'MID TOM', shortName: 'MID TOM', type: 'drum', xRatio: 0.52, yRatio: 0.03, wRatio: 0.22, hRatio: 0.28 },
-  { id: 'ride', name: 'RIDE CYMBAL', shortName: 'RIDE 20"', type: 'cymbal', xRatio: 0.76, yRatio: 0.03, wRatio: 0.22, hRatio: 0.28 },
-
-  // Middle Row: Hi-Hat, Snare, Floor Tom
-  { id: 'hihat_closed', name: 'HI-HAT', shortName: 'HI-HAT 14"', type: 'cymbal', xRatio: 0.02, yRatio: 0.35, wRatio: 0.22, hRatio: 0.29 },
-  { id: 'snare', name: 'SNARE DRUM', shortName: 'SNARE 14"', type: 'drum', xRatio: 0.26, yRatio: 0.35, wRatio: 0.22, hRatio: 0.29 },
-  { id: 'floor_tom', name: 'FLOOR TOM', shortName: 'FLOOR TOM', type: 'drum', xRatio: 0.76, yRatio: 0.35, wRatio: 0.22, hRatio: 0.29 },
-
-  // Bottom Center: Bass Drum (Kick)
-  { id: 'bass', name: 'BASS DRUM (KICK)', shortName: 'BASS DRUM 22"', type: 'drum', xRatio: 0.33, yRatio: 0.67, wRatio: 0.34, hRatio: 0.30 },
+  x: number; y: number; w: number; h: number;
+}> = [
+  { id: 'crash',        label: 'CRASH',     type: 'cymbal', x: 0.02, y: 0.03, w: 0.22, h: 0.28 },
+  { id: 'high_tom',     label: 'HI TOM',    type: 'drum',   x: 0.26, y: 0.03, w: 0.22, h: 0.28 },
+  { id: 'mid_tom',      label: 'MID TOM',   type: 'drum',   x: 0.52, y: 0.03, w: 0.22, h: 0.28 },
+  { id: 'ride',         label: 'RIDE',      type: 'cymbal', x: 0.76, y: 0.03, w: 0.22, h: 0.28 },
+  { id: 'hihat_closed', label: 'HI-HAT',    type: 'cymbal', x: 0.02, y: 0.35, w: 0.22, h: 0.29 },
+  { id: 'snare',        label: 'SNARE',     type: 'drum',   x: 0.26, y: 0.35, w: 0.22, h: 0.29 },
+  { id: 'floor_tom',    label: 'FLOOR TOM', type: 'drum',   x: 0.76, y: 0.35, w: 0.22, h: 0.29 },
+  { id: 'bass',         label: 'BASS',      type: 'drum',   x: 0.33, y: 0.67, w: 0.34, h: 0.30 },
 ];
 
 export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
@@ -42,798 +30,562 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   handedness = 'RIGHT_HANDED',
   invertHands = false,
 }) => {
-  const [isActive, setIsActive] = useState<boolean>(false);
-  const [isStarting, setIsStarting] = useState<boolean>(false);
-  const [trackingMode, setTrackingMode] = useState<'fingers' | 'sticks'>('fingers');
-  const [sensitivity, setSensitivity] = useState<number>(65);
+  // ── State ──────────────────────────────────────────────────────────────────
+  const [isActive, setIsActive]     = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isDemoMode, setIsDemoMode] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [fps, setFps] = useState<number>(0);
-  const [cameraResolution, setCameraResolution] = useState<string>('');
-  const [cameraDeviceLabel, setCameraDeviceLabel] = useState<string>('');
-  const [isVideoPaused, setIsVideoPaused] = useState<boolean>(false);
-  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
-  const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
-  const [diagnosticLogs, setDiagnosticLogs] = useState<string[]>([]);
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
+  const [fps, setFps]               = useState(0);
+  const [resolution, setResolution] = useState('');
+  const [deviceLabel, setDeviceLabel] = useState('');
+  const [showDiag, setShowDiag]     = useState(false);
+  const [diagLogs, setDiagLogs]     = useState<string[]>([]);
+  const [sensitivity, setSensitivity] = useState(60);
 
-  // Per-zone motion levels & flash states
-  const [zoneMotionLevels, setZoneMotionLevels] = useState<Record<string, number>>({});
-  const [zoneFlashes, setZoneFlashes] = useState<Record<string, boolean>>({});
-  const [zoneHitCounts, setZoneHitCounts] = useState<Record<string, number>>({});
+  // Per-zone flash + hit count stored in refs to avoid re-render lag
+  const flashRef    = useRef<Record<string, number>>({});   // timestamp of last flash
+  const hitCountRef = useRef<Record<string, number>>({});
+  const lastHitRef  = useRef<Record<string, number>>({});
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const procCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  // ── Refs ───────────────────────────────────────────────────────────────────
+  // Hidden video element — never shown in DOM visually, only used as source for canvas.drawImage
+  const videoRef    = useRef<HTMLVideoElement | null>(null);
+  const canvasRef   = useRef<HTMLCanvasElement | null>(null);
+  const procRef     = useRef<HTMLCanvasElement | null>(null);   // 160×90 processing canvas
+  const streamRef   = useRef<MediaStream | null>(null);
+  const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
+  const rafRef      = useRef<number>(0);
 
-  const prevFrameDataRef = useRef<Uint8ClampedArray | null>(null);
-  const lastZoneStrikeTimeRef = useRef<Record<string, number>>({});
+  // Force a rerender for hit count display
+  const [hitDisplay, setHitDisplay] = useState<Record<string, number>>({});
+  const [motionDisplay, setMotionDisplay] = useState<Record<string, number>>({});
 
-  const addLog = (msg: string) => {
-    const time = new Date().toLocaleTimeString();
-    setDiagnosticLogs((prev) => [`[${time}] ${msg}`, ...prev.slice(0, 20)]);
-  };
-
-  const triggerStrike = useCallback((instId: DrumInstrumentId) => {
-    const now = performance.now();
-    const lastTime = lastZoneStrikeTimeRef.current[instId] || 0;
-    if (now - lastTime < 160) return;
-    lastZoneStrikeTimeRef.current[instId] = now;
-
-    const assignedHand = getInstrumentHand(instId, handedness, invertHands);
-
-    setZoneHitCounts((prev) => ({ ...prev, [instId]: (prev[instId] || 0) + 1 }));
-    setZoneFlashes((prev) => ({ ...prev, [instId]: true }));
-    setTimeout(() => {
-      setZoneFlashes((prev) => ({ ...prev, [instId]: false }));
-    }, 200);
-
-    onAirStrike(instId, assignedHand);
-  }, [onAirStrike, handedness, invertHands]);
-
-  // Enumerate camera devices
-  const refreshDevices = useCallback(async () => {
-    try {
-      if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevs = devices.filter((d) => d.kind === 'videoinput');
-        setAvailableDevices(videoDevs);
-        if (videoDevs.length > 0 && !selectedDeviceId) {
-          setSelectedDeviceId(videoDevs[0].deviceId);
-        }
-      }
-    } catch (e) {
-      console.warn('Device enumeration error:', e);
-    }
-  }, [selectedDeviceId]);
-
-  useEffect(() => {
-    refreshDevices();
-  }, [refreshDevices]);
-
-  const startCamera = async (overrideDeviceId?: string) => {
-    try {
-      setCameraError(null);
-      setIsStarting(true);
-      setIsVideoPaused(false);
-      setIsDemoMode(false);
-      addLog('Requesting camera permissions...');
-
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera API requires HTTPS or a modern browser.');
-      }
-
-      const targetDevice = overrideDeviceId || selectedDeviceId;
-
-      // Progressive constraint fallback
-      let stream: MediaStream | null = null;
-      const constraintsList: MediaStreamConstraints[] = [
-        ...(targetDevice
-          ? [{ video: { deviceId: { exact: targetDevice } }, audio: false }]
-          : []),
-        {
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user',
-          },
-          audio: false,
-        },
-        {
-          video: { facingMode: 'user' },
-          audio: false,
-        },
-        {
-          video: true,
-          audio: false,
-        },
-      ];
-
-      for (const constraints of constraintsList) {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia(constraints);
-          if (stream) {
-            addLog(`Acquired stream successfully with ${JSON.stringify(constraints.video)}`);
-            break;
-          }
-        } catch (err: unknown) {
-          addLog(`Constraint attempt failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-
-      if (!stream) {
-        throw new Error('Unable to access camera. Please check browser permissions and Windows/Mac camera privacy settings.');
-      }
-
-      streamRef.current = stream;
-
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack) {
-        setCameraDeviceLabel(videoTrack.label || 'Webcam');
-        addLog(`Video Track: ${videoTrack.label} (${videoTrack.readyState})`);
-      }
-
-      const video = videoRef.current;
-      if (video) {
-        video.srcObject = stream;
-        video.muted = true;
-        video.playsInline = true;
-        video.autoplay = true;
-
-        video.onpause = () => setIsVideoPaused(true);
-        video.onplay = () => setIsVideoPaused(false);
-
-        try {
-          await video.play();
-          addLog('video.play() initiated');
-          if (video.videoWidth > 0) {
-            setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
-          }
-        } catch (e) {
-          addLog(`video.play() rejected: ${e}`);
-        }
-
-        video.onloadedmetadata = async () => {
-          try {
-            await video.play();
-            if (video.videoWidth > 0) {
-              setCameraResolution(`${video.videoWidth}x${video.videoHeight}`);
-              addLog(`Metadata loaded: ${video.videoWidth}x${video.videoHeight}`);
-            }
-          } catch (playErr) {
-            addLog(`onloadedmetadata play error: ${playErr}`);
-          }
-        };
-      }
-
-      setIsActive(true);
-      setIsStarting(false);
-      refreshDevices();
-    } catch (err: unknown) {
-      console.error('Camera access error:', err);
-      const msg = err instanceof Error ? err.message : 'Camera access denied or unavailable.';
-      setCameraError(msg);
-      addLog(`ERROR: ${msg}`);
-      setIsActive(false);
-      setIsStarting(false);
-    }
-  };
-
-  const resumeVideo = async () => {
-    const video = videoRef.current;
-    if (video) {
-      try {
-        await video.play();
-        setIsVideoPaused(false);
-        addLog('Resumed video playback');
-      } catch (e) {
-        addLog(`Resume error: ${e}`);
-      }
-    }
-  };
-
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    setIsActive(false);
-    setIsStarting(false);
-    setIsVideoPaused(false);
-    setIsDemoMode(false);
-    prevFrameDataRef.current = null;
-    setFps(0);
-    setZoneMotionLevels({});
-    setCameraResolution('');
-    setCameraDeviceLabel('');
-    addLog('Camera stopped');
-  };
-
-  // Demo motion simulation
-  useEffect(() => {
-    if (!isDemoMode) return;
-    let demoIdx = 0;
-    const demoOrder: DrumInstrumentId[] = ['hihat_closed', 'snare', 'hihat_closed', 'bass', 'crash', 'high_tom', 'mid_tom', 'floor_tom'];
-    const timer = setInterval(() => {
-      const target = demoOrder[demoIdx % demoOrder.length];
-      triggerStrike(target);
-      demoIdx++;
-    }, 450);
-    return () => clearInterval(timer);
-  }, [isDemoMode, triggerStrike]);
-
-  // Clean up on unmount
-  useEffect(() => {
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
-    };
+  // ── Logging ────────────────────────────────────────────────────────────────
+  const log = useCallback((msg: string) => {
+    const t = new Date().toLocaleTimeString();
+    setDiagLogs(p => [`[${t}] ${msg}`, ...p.slice(0, 24)]);
+    console.log('[AirDrum]', msg);
   }, []);
 
-  // Main Canvas Render & Motion Detection Loop
+  // ── Strike trigger ─────────────────────────────────────────────────────────
+  const fireStrike = useCallback((id: DrumInstrumentId) => {
+    const now = performance.now();
+    if (now - (lastHitRef.current[id] || 0) < 180) return;
+    lastHitRef.current[id] = now;
+    flashRef.current[id] = now;
+    hitCountRef.current[id] = (hitCountRef.current[id] || 0) + 1;
+
+    // Batch UI updates once per strike
+    setHitDisplay(p => ({ ...p, [id]: hitCountRef.current[id] }));
+
+    const hand = getInstrumentHand(id, handedness, invertHands);
+    onAirStrike(id, hand);
+  }, [onAirStrike, handedness, invertHands]);
+
+  // ── Demo mode ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    let animId: number;
-    let frameCount = 0;
-    let lastFpsCalcTime = performance.now();
+    if (!isDemoMode) return;
+    const seq: DrumInstrumentId[] = [
+      'hihat_closed', 'snare', 'hihat_closed', 'bass',
+      'crash', 'high_tom', 'mid_tom', 'floor_tom',
+    ];
+    let i = 0;
+    const t = setInterval(() => { fireStrike(seq[i++ % seq.length]); }, 430);
+    return () => clearInterval(t);
+  }, [isDemoMode, fireStrike]);
 
-    if (!procCanvasRef.current) {
-      procCanvasRef.current = document.createElement('canvas');
-      procCanvasRef.current.width = 160;
-      procCanvasRef.current.height = 120;
+  // ── Camera start ───────────────────────────────────────────────────────────
+  const startCamera = useCallback(async () => {
+    setCameraError(null);
+    setIsStarting(true);
+    setIsDemoMode(false);
+    prevFrameRef.current = null;
+    log('Requesting camera...');
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      const e = 'Camera API unavailable. This page needs HTTPS or localhost.';
+      setCameraError(e); log('ERROR: ' + e); setIsStarting(false); return;
     }
 
-    const renderAndDetect = () => {
-      const video = videoRef.current;
-      const overlayCanvas = overlayCanvasRef.current;
-      const procCanvas = procCanvasRef.current;
+    const attempts: MediaStreamConstraints[] = [
+      { video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false },
+      { video: { facingMode: 'user' }, audio: false },
+      { video: true, audio: false },
+    ];
 
-      if (!overlayCanvas || !procCanvas) {
-        animId = requestAnimationFrame(renderAndDetect);
-        return;
+    let stream: MediaStream | null = null;
+    for (const c of attempts) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(c);
+        log(`Stream acquired (${JSON.stringify(c.video)})`);
+        break;
+      } catch (err) {
+        log(`Attempt failed: ${err instanceof Error ? err.message : String(err)}`);
       }
-
-      const oCtx = overlayCanvas.getContext('2d');
-      if (!oCtx) {
-        animId = requestAnimationFrame(renderAndDetect);
-        return;
-      }
-
-      const w = overlayCanvas.width;
-      const h = overlayCanvas.height;
-
-      // 1. Calculate FPS
-      frameCount++;
-      const now = performance.now();
-      if (now - lastFpsCalcTime >= 1000) {
-        setFps(frameCount);
-        frameCount = 0;
-        lastFpsCalcTime = now;
-      }
-
-      // 2. Clear canvas when active so video shows through 100%
-      if (isActive) {
-        oCtx.clearRect(0, 0, w, h);
-
-        // 3. Process Optical Flow from Video
-        if (video && video.readyState >= 2 && video.videoWidth > 0) {
-          const pCtx = procCanvas.getContext('2d', { willReadFrequently: true });
-          if (pCtx) {
-            pCtx.drawImage(video, 0, 0, 160, 120);
-            const frame = pCtx.getImageData(0, 0, 160, 120);
-            const data = frame.data;
-
-            if (prevFrameDataRef.current && prevFrameDataRef.current.length === data.length) {
-              const prev = prevFrameDataRef.current;
-              const thresholdMultiplier = trackingMode === 'fingers' ? 0.65 : 0.9;
-              const rawThreshold = (220 + (100 - sensitivity) * 12) * thresholdMultiplier;
-
-              const newMotionLevels: Record<string, number> = {};
-
-              AIR_ZONES.forEach((zone) => {
-                const rawX = zone.xRatio;
-                const mirroredX = 1.0 - (rawX + zone.wRatio);
-
-                const minX = Math.floor(mirroredX * 160);
-                const maxX = Math.floor((mirroredX + zone.wRatio) * 160);
-                const minY = Math.floor(zone.yRatio * 120);
-                const maxY = Math.floor((zone.yRatio + zone.hRatio) * 120);
-
-                let zoneMotionSum = 0;
-
-                for (let py = minY; py < maxY; py += 2) {
-                  for (let px = minX; px < maxX; px += 2) {
-                    const i = (py * 160 + px) * 4;
-                    const diff = Math.abs(data[i] - prev[i]) +
-                                 Math.abs(data[i + 1] - prev[i + 1]) +
-                                 Math.abs(data[i + 2] - prev[i + 2]);
-
-                    if (diff > 25) {
-                      zoneMotionSum += diff;
-                    }
-                  }
-                }
-
-                const percent = Math.min(100, Math.round((zoneMotionSum / rawThreshold) * 100));
-                newMotionLevels[zone.id] = percent;
-
-                if (zoneMotionSum >= rawThreshold) {
-                  triggerStrike(zone.id);
-                }
-              });
-
-              setZoneMotionLevels(newMotionLevels);
-            }
-
-            prevFrameDataRef.current = new Uint8ClampedArray(data);
-          }
-        }
-      } else {
-        // When Camera is OFFLINE: Render Studio Stage Grid
-        const bgGrad = oCtx.createLinearGradient(0, 0, 0, h);
-        bgGrad.addColorStop(0, '#0a1020');
-        bgGrad.addColorStop(0.5, '#070b16');
-        bgGrad.addColorStop(1, '#03050a');
-        oCtx.fillStyle = bgGrad;
-        oCtx.fillRect(0, 0, w, h);
-
-        oCtx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
-        oCtx.lineWidth = 1;
-        for (let gx = 0; gx < w; gx += 40) {
-          oCtx.beginPath();
-          oCtx.moveTo(gx, 0);
-          oCtx.lineTo(gx, h);
-          oCtx.stroke();
-        }
-        for (let gy = 0; gy < h; gy += 40) {
-          oCtx.beginPath();
-          oCtx.moveTo(0, gy);
-          oCtx.lineTo(w, gy);
-          oCtx.stroke();
-        }
-      }
-
-      // 4. Render 8-Zone Skeleton Rig & AR Crosshairs onto Overlay Canvas
-      AIR_ZONES.forEach((zone) => {
-        const zx = Math.round(zone.xRatio * w);
-        const zy = Math.round(zone.yRatio * h);
-        const zw = Math.round(zone.wRatio * w);
-        const zh = Math.round(zone.hRatio * h);
-        const cx = zx + zw / 2;
-        const cy = zy + zh / 2;
-
-        const assignedHand = getInstrumentHand(zone.id, handedness, invertHands);
-        const isRight = assignedHand === 'RIGHT';
-        const zoneColor = isRight ? '#FF6D00' : '#00E5FF';
-        const isFlashing = zoneFlashes[zone.id];
-
-        oCtx.save();
-
-        // 4A. Zone Bounding Box
-        oCtx.strokeStyle = isFlashing ? '#FFFFFF' : isActive ? zoneColor : `${zoneColor}99`;
-        oCtx.lineWidth = isFlashing ? 5 : 2;
-        oCtx.fillStyle = isFlashing
-          ? `${zoneColor}88`
-          : isActive
-          ? `${zoneColor}1F`
-          : `${zoneColor}14`;
-
-        oCtx.beginPath();
-        oCtx.roundRect(zx, zy, zw, zh, 12);
-        oCtx.fill();
-        oCtx.stroke();
-
-        // 4B. AR Corner Brackets
-        const cLen = 12;
-        oCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
-        oCtx.lineWidth = 3;
-        oCtx.beginPath();
-        oCtx.moveTo(zx, zy + cLen);
-        oCtx.lineTo(zx, zy);
-        oCtx.lineTo(zx + cLen, zy);
-        oCtx.moveTo(zx + zw - cLen, zy);
-        oCtx.lineTo(zx + zw, zy);
-        oCtx.lineTo(zx + zw, zy + cLen);
-        oCtx.moveTo(zx, zy + zh - cLen);
-        oCtx.lineTo(zx, zy + zh);
-        oCtx.lineTo(zx + cLen, zy + zh);
-        oCtx.moveTo(zx + zw - cLen, zy + zh);
-        oCtx.lineTo(zx + zw, zy + zh);
-        oCtx.lineTo(zx + zw, zy + zh - cLen);
-        oCtx.stroke();
-
-        // 4C. Drum/Cymbal Wireframe Graphic
-        const radius = Math.min(zw, zh) * 0.32;
-        if (zone.type === 'cymbal') {
-          oCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
-          oCtx.lineWidth = 1.5;
-          oCtx.beginPath();
-          oCtx.arc(cx, cy, radius, 0, Math.PI * 2);
-          oCtx.stroke();
-
-          oCtx.beginPath();
-          oCtx.arc(cx, cy, radius * 0.65, 0, Math.PI * 2);
-          oCtx.stroke();
-
-          oCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
-          oCtx.beginPath();
-          oCtx.arc(cx, cy, radius * 0.28, 0, Math.PI * 2);
-          oCtx.fill();
-        } else {
-          oCtx.strokeStyle = isFlashing ? '#FFFFFF' : `${zoneColor}88`;
-          oCtx.lineWidth = 2;
-          oCtx.beginPath();
-          oCtx.arc(cx, cy, radius, 0, Math.PI * 2);
-          oCtx.stroke();
-
-          oCtx.strokeStyle = `${zoneColor}44`;
-          oCtx.lineWidth = 1;
-          oCtx.beginPath();
-          oCtx.arc(cx, cy, radius * 0.75, 0, Math.PI * 2);
-          oCtx.stroke();
-
-          oCtx.strokeStyle = isFlashing ? '#FFFFFF' : zoneColor;
-          oCtx.lineWidth = 1.5;
-          oCtx.beginPath();
-          oCtx.moveTo(cx - radius * 0.4, cy);
-          oCtx.lineTo(cx + radius * 0.4, cy);
-          oCtx.moveTo(cx, cy - radius * 0.4);
-          oCtx.lineTo(cx, cy + radius * 0.4);
-          oCtx.stroke();
-
-          oCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
-          oCtx.beginPath();
-          oCtx.arc(cx, cy, radius * 0.22, 0, Math.PI * 2);
-          oCtx.fill();
-        }
-
-        // 4D. Labels
-        oCtx.fillStyle = isFlashing ? '#FFFFFF' : zoneColor;
-        oCtx.font = 'bold 11px "Montserrat", sans-serif';
-        oCtx.fillText(zone.shortName, zx + 8, zy + 16);
-
-        oCtx.fillStyle = '#FFFFFF';
-        oCtx.font = '10px monospace';
-        oCtx.fillText(isRight ? 'RH [J/K]' : 'LH [D/F]', zx + 8, zy + 30);
-
-        oCtx.restore();
-      });
-
-      animId = requestAnimationFrame(renderAndDetect);
-    };
-
-    animId = requestAnimationFrame(renderAndDetect);
-
-    return () => {
-      cancelAnimationFrame(animId);
-    };
-  }, [isActive, sensitivity, trackingMode, triggerStrike, zoneFlashes, handedness, invertHands]);
-
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!overlayCanvasRef.current) return;
-    const rect = overlayCanvasRef.current.getBoundingClientRect();
-    const clickXRatio = (e.clientX - rect.left) / rect.width;
-    const clickYRatio = (e.clientY - rect.top) / rect.height;
-
-    const clickedZone = AIR_ZONES.find(
-      (z) =>
-        clickXRatio >= z.xRatio &&
-        clickXRatio <= z.xRatio + z.wRatio &&
-        clickYRatio >= z.yRatio &&
-        clickYRatio <= z.yRatio + z.hRatio
-    );
-
-    if (clickedZone) {
-      triggerStrike(clickedZone.id);
     }
+
+    if (!stream) {
+      const e = 'Camera blocked. Check browser permissions → site settings → camera → allow.';
+      setCameraError(e); log('ERROR: ' + e); setIsStarting(false); return;
+    }
+
+    streamRef.current = stream;
+    const track = stream.getVideoTracks()[0];
+    if (track) { setDeviceLabel(track.label || 'Camera'); log('Track: ' + track.label); }
+
+    // Attach stream to the HIDDEN video element
+    const video = videoRef.current!;
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+
+    try {
+      await video.play();
+      log('video.play() success');
+    } catch {
+      // onloadedmetadata fallback
+      log('video.play() deferred to metadata');
+    }
+
+    video.onloadedmetadata = () => {
+      video.play().catch(() => {});
+      setResolution(`${video.videoWidth}×${video.videoHeight}`);
+      log(`Metadata: ${video.videoWidth}×${video.videoHeight}`);
+    };
+
+    setIsActive(true);
+    setIsStarting(false);
+  }, [log]);
+
+  // ── Camera stop ────────────────────────────────────────────────────────────
+  const stopCamera = useCallback(() => {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) { videoRef.current.srcObject = null; }
+    prevFrameRef.current = null;
+    setIsActive(false); setIsStarting(false); setIsDemoMode(false);
+    setFps(0); setResolution(''); setDeviceLabel('');
+    log('Camera stopped.');
+  }, [log]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    cancelAnimationFrame(rafRef.current);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+  }, []);
+
+  // ── Draw a zone box + icon on canvas ──────────────────────────────────────
+  const drawZone = (
+    ctx: CanvasRenderingContext2D,
+    zone: typeof ZONES[0],
+    W: number, H: number,
+    flashing: boolean,
+    active: boolean,
+    hand: 'LEFT' | 'RIGHT',
+  ) => {
+    const zx = zone.x * W, zy = zone.y * H;
+    const zw = zone.w * W, zh = zone.h * H;
+    const cx = zx + zw / 2, cy = zy + zh / 2;
+    const col = hand === 'RIGHT' ? '#FF6D00' : '#00E5FF';
+    const alpha = active ? '44' : '28';
+
+    ctx.save();
+
+    // Box fill
+    ctx.fillStyle = flashing ? col + 'AA' : col + alpha;
+    ctx.strokeStyle = flashing ? '#FFFFFF' : col;
+    ctx.lineWidth = flashing ? 4 : 2;
+    ctx.beginPath();
+    ctx.roundRect(zx, zy, zw, zh, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    // Corner brackets
+    const cL = 10;
+    ctx.strokeStyle = flashing ? '#FFF' : col;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(zx, zy + cL); ctx.lineTo(zx, zy); ctx.lineTo(zx + cL, zy);
+    ctx.moveTo(zx + zw - cL, zy); ctx.lineTo(zx + zw, zy); ctx.lineTo(zx + zw, zy + cL);
+    ctx.moveTo(zx, zy + zh - cL); ctx.lineTo(zx, zy + zh); ctx.lineTo(zx + cL, zy + zh);
+    ctx.moveTo(zx + zw - cL, zy + zh); ctx.lineTo(zx + zw, zy + zh); ctx.lineTo(zx + zw, zy + zh - cL);
+    ctx.stroke();
+
+    // Icon
+    const r = Math.min(zw, zh) * 0.28;
+    ctx.strokeStyle = flashing ? '#FFF' : col + '88';
+    ctx.lineWidth = 1.5;
+    if (zone.type === 'cymbal') {
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.6, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = flashing ? '#FFF' : col;
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.22, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = col + '44'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.7, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = flashing ? '#FFF' : col; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 0.4, cy); ctx.lineTo(cx + r * 0.4, cy);
+      ctx.moveTo(cx, cy - r * 0.4); ctx.lineTo(cx, cy + r * 0.4);
+      ctx.stroke();
+      ctx.fillStyle = flashing ? '#FFF' : col;
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.18, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Label
+    ctx.fillStyle = flashing ? '#FFF' : col;
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(zone.label, zx + 6, zy + 14);
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.font = '9px monospace';
+    ctx.fillText(hand === 'RIGHT' ? 'RH' : 'LH', zx + 6, zy + 25);
+
+    ctx.restore();
   };
 
+  // ── Main render + motion detection loop ────────────────────────────────────
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Offscreen 160×90 processing canvas for optical flow
+    if (!procRef.current) {
+      procRef.current = document.createElement('canvas');
+      procRef.current.width = 160;
+      procRef.current.height = 90;
+    }
+    const proc = procRef.current;
+
+    let frameCount = 0;
+    let fpsTimer = performance.now();
+    const newMotions: Record<string, number> = {};
+
+    const loop = () => {
+      rafRef.current = requestAnimationFrame(loop);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const W = canvas.width, H = canvas.height;
+
+      // FPS
+      frameCount++;
+      const now = performance.now();
+      if (now - fpsTimer >= 1000) {
+        setFps(frameCount);
+        frameCount = 0;
+        fpsTimer = now;
+      }
+
+      // ── BACKGROUND ──────────────────────────────────────────────────────
+      const video = videoRef.current;
+      const videoReady = video && video.readyState >= 2 && video.videoWidth > 0;
+
+      if (isActive && videoReady) {
+        // Draw mirrored video frame as background
+        ctx.save();
+        ctx.translate(W, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0, W, H);
+        ctx.restore();
+
+        // ── MOTION DETECTION ──────────────────────────────────────────────
+        const pCtx = proc.getContext('2d', { willReadFrequently: true });
+        if (pCtx) {
+          pCtx.save();
+          pCtx.translate(160, 0);
+          pCtx.scale(-1, 1);
+          pCtx.drawImage(video, 0, 0, 160, 90);
+          pCtx.restore();
+
+          const frame = pCtx.getImageData(0, 0, 160, 90);
+          const d = frame.data;
+          const prev = prevFrameRef.current;
+
+          if (prev && prev.length === d.length) {
+            const threshold = (100 + (100 - sensitivity) * 8);
+
+            ZONES.forEach(z => {
+              const x0 = Math.floor(z.x * 160), x1 = Math.floor((z.x + z.w) * 160);
+              const y0 = Math.floor(z.y * 90),  y1 = Math.floor((z.y + z.h) * 90);
+              let sum = 0;
+              for (let py = y0; py < y1; py += 2) {
+                for (let px = x0; px < x1; px += 2) {
+                  const i = (py * 160 + px) * 4;
+                  const diff = Math.abs(d[i] - prev[i])
+                             + Math.abs(d[i+1] - prev[i+1])
+                             + Math.abs(d[i+2] - prev[i+2]);
+                  if (diff > 20) sum += diff;
+                }
+              }
+              const pct = Math.min(100, Math.round(sum / threshold * 100));
+              newMotions[z.id] = pct;
+              if (sum >= threshold) fireStrike(z.id as DrumInstrumentId);
+            });
+            setMotionDisplay({ ...newMotions });
+          }
+          prevFrameRef.current = new Uint8ClampedArray(d);
+        }
+      } else {
+        // Dark gradient background when camera is off
+        const bg = ctx.createLinearGradient(0, 0, 0, H);
+        bg.addColorStop(0, '#0a1020');
+        bg.addColorStop(1, '#03050a');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, W, H);
+        // Subtle grid
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+        ctx.lineWidth = 1;
+        for (let gx = 0; gx < W; gx += 40) {
+          ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+        }
+        for (let gy = 0; gy < H; gy += 40) {
+          ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+        }
+      }
+
+      // ── DRAW 8 ZONES (always, over whatever background) ────────────────
+      const flashNow = performance.now();
+      ZONES.forEach(z => {
+        const hand = getInstrumentHand(z.id, handedness, invertHands);
+        const flashing = flashNow - (flashRef.current[z.id] || 0) < 220;
+        drawZone(ctx, z, W, H, flashing, isActive, hand);
+      });
+
+      // ── TOP LEGEND ───────────────────────────────────────────────────────
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.beginPath();
+      ctx.roundRect(W / 2 - 130, 5, 260, 18, 9);
+      ctx.fill();
+      ctx.font = '9px monospace';
+      ctx.fillStyle = '#67e8f9';
+      ctx.textAlign = 'left';
+      ctx.fillText('● CYAN = LEFT HAND', W / 2 - 122, 17);
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('  |  ', W / 2 - 10, 17);
+      ctx.fillStyle = '#fb923c';
+      ctx.fillText('● ORANGE = RIGHT HAND', W / 2 + 18, 17);
+      ctx.textAlign = 'left';
+
+      // ── STATUS badge ─────────────────────────────────────────────────────
+      if (isActive && videoReady) {
+        ctx.fillStyle = 'rgba(4,120,87,0.85)';
+        ctx.beginPath(); ctx.roundRect(6, 6, 90, 16, 4); ctx.fill();
+        ctx.fillStyle = '#6ee7b7'; ctx.font = 'bold 9px monospace';
+        ctx.fillText(`● LIVE ${fps}fps`, 12, 17);
+      } else if (isActive && !videoReady) {
+        ctx.fillStyle = 'rgba(180,83,9,0.85)';
+        ctx.beginPath(); ctx.roundRect(6, 6, 100, 16, 4); ctx.fill();
+        ctx.fillStyle = '#fcd34d'; ctx.font = 'bold 9px monospace';
+        ctx.fillText('⏳ LOADING VIDEO...', 12, 17);
+      }
+    };
+
+    rafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive, sensitivity, handedness, invertHands, fireStrike, fps]);
+
+  // ── Canvas click → trigger zone ────────────────────────────────────────────
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const rx = (e.clientX - rect.left) / rect.width;
+    const ry = (e.clientY - rect.top)  / rect.height;
+    const hit = ZONES.find(z => rx >= z.x && rx <= z.x + z.w && ry >= z.y && ry <= z.y + z.h);
+    if (hit) fireStrike(hit.id);
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="w-full flex flex-col gap-1.5 rounded-xl bg-gradient-to-b from-slate-900 via-[#0e1628] to-[#070b14] border border-slate-800 p-2.5 shadow-xl">
-      {/* Top Header */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-1.5 flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          <div className="p-1 rounded-lg bg-emerald-950 border border-emerald-500/30 text-emerald-400">
-            <Camera className="w-4 h-4" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8,
+      borderRadius: 12, background: 'linear-gradient(180deg,#0f172a,#070b14)',
+      border: '1px solid #1e293b', padding: 10 }}>
+
+      {/* HIDDEN video element — only used as drawImage source */}
+      <video ref={videoRef} autoPlay playsInline muted
+        style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
+
+      {/* ── HEADER ── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        borderBottom: '1px solid #1e293b', paddingBottom: 8, flexWrap: 'wrap', gap: 6 }}>
+
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontWeight: 900, fontSize: 13, color: '#fff', fontFamily: 'monospace' }}>
+              🥁 AIR DRUMMING — 8 ZONES
+            </span>
+            {isActive
+              ? <span style={{ fontSize: 10, color: '#6ee7b7', background: '#022c22', border: '1px solid #10b981', borderRadius: 4, padding: '1px 6px', fontFamily: 'monospace' }}>● LIVE {resolution}</span>
+              : isDemoMode
+              ? <span style={{ fontSize: 10, color: '#c084fc', background: '#3b0764', border: '1px solid #a855f7', borderRadius: 4, padding: '1px 6px', fontFamily: 'monospace' }}>✨ DEMO</span>
+              : <span style={{ fontSize: 10, color: '#64748b', background: '#1e293b', border: '1px solid #334155', borderRadius: 4, padding: '1px 6px', fontFamily: 'monospace' }}>STANDBY</span>
+            }
           </div>
-          <div>
-            <h3 className="font-display font-black text-xs sm:text-sm text-white flex items-center gap-2">
-              AIR DRUMMING
-              {isActive ? (
-                <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                  ● LIVE FEED {cameraResolution ? `(${cameraResolution})` : ''} • {fps} FPS
-                </span>
-              ) : isDemoMode ? (
-                <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 border border-purple-500/40 flex items-center gap-1 animate-pulse">
-                  <Sparkles className="w-3 h-3 text-purple-400" />
-                  ● DEMO AUTO-TRACKING ACTIVE
-                </span>
-              ) : (
-                <span className="text-[10px] font-mono-code px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
-                  STANDBY (SKELETON READY)
-                </span>
-              )}
-            </h3>
-            <p className="text-[10px] font-mono-code text-slate-400">
-              {cameraDeviceLabel ? `Active: ${cameraDeviceLabel}` : 'Interactive 8-zone spatial drum skeleton with motion tracking'}
-            </p>
-          </div>
+          {deviceLabel && <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', marginTop: 2 }}>📷 {deviceLabel}</div>}
         </div>
 
-        <div className="flex items-center gap-1.5">
-          {/* Demo Mode Button */}
-          <button
-            onClick={() => {
-              if (isActive) stopCamera();
-              setIsDemoMode((p) => !p);
-            }}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-display font-black transition-all ${
-              isDemoMode
-                ? 'bg-purple-600 text-white shadow-[0_0_12px_#A855F7]'
-                : 'bg-purple-950/70 hover:bg-purple-900 border border-purple-500/50 text-purple-200'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-            <span>{isDemoMode ? 'STOP DEMO' : '✨ DEMO MODE'}</span>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {/* Demo */}
+          <button onClick={() => { if (isActive) stopCamera(); setIsDemoMode(p => !p); }}
+            style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #7c3aed',
+              background: isDemoMode ? '#7c3aed' : '#3b076699',
+              color: isDemoMode ? '#fff' : '#c084fc',
+              fontWeight: 700, fontSize: 11, cursor: 'pointer', fontFamily: 'monospace' }}>
+            ✨ {isDemoMode ? 'STOP DEMO' : 'DEMO MODE'}
           </button>
 
-          {/* Camera Selector Dropdown if multiple devices */}
-          {availableDevices.length > 1 && !isActive && (
-            <select
-              value={selectedDeviceId}
-              onChange={(e) => {
-                setSelectedDeviceId(e.target.value);
-                if (isActive) startCamera(e.target.value);
-              }}
-              className="bg-slate-900 border border-slate-700 text-slate-200 text-[10px] rounded px-1.5 py-1 font-mono-code max-w-[130px] truncate"
-            >
-              {availableDevices.map((d, i) => (
-                <option key={d.deviceId} value={d.deviceId}>
-                  {d.label || `Camera ${i + 1}`}
-                </option>
-              ))}
-            </select>
-          )}
+          {/* Start / Stop camera */}
+          {isActive
+            ? <button onClick={stopCamera}
+                style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #ef4444',
+                  background: '#450a0a', color: '#fca5a5', fontWeight: 700, fontSize: 11,
+                  cursor: 'pointer', fontFamily: 'monospace' }}>
+                ⏹ STOP
+              </button>
+            : <button onClick={startCamera} disabled={isStarting}
+                style={{ padding: '4px 12px', borderRadius: 6, border: 'none',
+                  background: isStarting ? '#374151' : 'linear-gradient(90deg,#059669,#0d9488)',
+                  color: '#fff', fontWeight: 900, fontSize: 11,
+                  cursor: isStarting ? 'not-allowed' : 'pointer', fontFamily: 'monospace' }}>
+                {isStarting ? '⏳ STARTING...' : '📷 START CAMERA'}
+              </button>
+          }
 
-          {isActive ? (
-            <button
-              onClick={stopCamera}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-500/40 text-xs font-mono-code font-bold transition-colors"
-            >
-              <CameraOff className="w-3.5 h-3.5" />
-              <span>Turn Off</span>
-            </button>
-          ) : (
-            <button
-              onClick={() => startCamera()}
-              disabled={isStarting}
-              className="flex items-center gap-1 px-3 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-display font-black shadow-[0_0_12px_rgba(16,185,129,0.4)] transition-all disabled:opacity-50"
-            >
-              {isStarting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Video className="w-3.5 h-3.5" />}
-              <span>{isStarting ? 'STARTING...' : 'START CAMERA'}</span>
-            </button>
-          )}
-
-          {/* Diagnostic Toggle Button */}
-          <button
-            onClick={() => setShowDiagnostics((p) => !p)}
-            className={`p-1.5 rounded-lg border text-xs font-mono-code transition-colors flex items-center gap-1 ${
-              showDiagnostics ? 'bg-amber-950 border-amber-500 text-amber-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
-            }`}
-            title="Toggle Live Camera Diagnostics"
-          >
-            <Info className="w-3.5 h-3.5 text-amber-400" />
-            <span className="text-[10px] font-bold hidden sm:inline">LOGS</span>
+          {/* Logs */}
+          <button onClick={() => setShowDiag(p => !p)}
+            style={{ padding: '4px 8px', borderRadius: 6,
+              border: `1px solid ${showDiag ? '#f59e0b' : '#334155'}`,
+              background: showDiag ? '#451a03' : '#1e293b',
+              color: showDiag ? '#fcd34d' : '#94a3b8',
+              fontWeight: 700, fontSize: 11, cursor: 'pointer', fontFamily: 'monospace' }}>
+            🔍 LOGS
           </button>
         </div>
       </div>
 
-      {/* Camera Error Banner */}
+      {/* ── ERROR BANNER ── */}
       {cameraError && (
-        <div className="p-2 rounded-lg bg-red-950/80 border border-red-500 text-red-200 text-[10px] font-mono-code flex items-start gap-1.5">
-          <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-          <div className="flex flex-col gap-0.5">
-            <strong className="text-red-300 font-bold">Camera Access Issue:</strong>
-            <span>{cameraError}</span>
-            <div className="flex items-center gap-2 mt-1">
-              <button
-                onClick={() => startCamera()}
-                className="px-2 py-0.5 rounded bg-red-800 hover:bg-red-700 text-white font-bold text-[9px]"
-              >
-                🔄 Retry Camera
-              </button>
-              <button
-                onClick={() => setShowDiagnostics(true)}
-                className="px-2 py-0.5 rounded bg-amber-900 hover:bg-amber-800 text-amber-200 font-bold text-[9px]"
-              >
-                🔍 View Diagnostics
-              </button>
-            </div>
+        <div style={{ padding: 8, borderRadius: 8, background: '#450a0a',
+          border: '1px solid #ef4444', color: '#fca5a5', fontSize: 11, fontFamily: 'monospace' }}>
+          ⚠️ {cameraError}
+          <div style={{ marginTop: 6, display: 'flex', gap: 6 }}>
+            <button onClick={startCamera}
+              style={{ padding: '2px 8px', borderRadius: 4, background: '#7f1d1d',
+                color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, fontFamily: 'monospace', fontWeight: 700 }}>
+              🔄 Retry
+            </button>
+            <button onClick={() => { setCameraError(null); setIsDemoMode(true); }}
+              style={{ padding: '2px 8px', borderRadius: 4, background: '#3b0764',
+                color: '#c084fc', border: 'none', cursor: 'pointer', fontSize: 10, fontFamily: 'monospace', fontWeight: 700 }}>
+              ✨ Try Demo
+            </button>
           </div>
         </div>
       )}
 
-      {/* Live Diagnostics Panel */}
-      {showDiagnostics && (
-        <div className="p-2 rounded-lg bg-black/95 border border-amber-500/50 text-[10px] font-mono-code text-amber-200 flex flex-col gap-1.5 shadow-2xl">
-          <div className="flex justify-between items-center border-b border-amber-500/20 pb-1">
-            <span className="font-bold text-amber-400 flex items-center gap-1">
-              <HelpCircle className="w-3.5 h-3.5" />
-              CAMERA & WEBCAM DIAGNOSTICS
-            </span>
-            <div className="flex gap-2">
-              <button onClick={() => setDiagnosticLogs([])} className="text-slate-400 hover:text-white text-[9px]">Clear</button>
-              <button onClick={() => setShowDiagnostics(false)} className="text-amber-400 hover:text-white font-bold">✕</button>
+      {/* ── DIAGNOSTICS ── */}
+      {showDiag && (
+        <div style={{ padding: 8, borderRadius: 8, background: '#000',
+          border: '1px solid #f59e0b88', fontFamily: 'monospace', fontSize: 10, color: '#fcd34d' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f59e0b44',
+            paddingBottom: 4, marginBottom: 6 }}>
+            <strong>🔍 DIAGNOSTICS</strong>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setDiagLogs([])}
+                style={{ color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', fontSize: 10 }}>Clear</button>
+              <button onClick={() => setShowDiag(false)}
+                style={{ color: '#fcd34d', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700 }}>✕</button>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-1.5 text-slate-300 text-[9px]">
-            <div>HTTPS Context: <strong className={window.isSecureContext ? 'text-emerald-400' : 'text-red-400'}>{window.isSecureContext ? 'YES (Secure)' : 'NO (Insecure)'}</strong></div>
-            <div>MediaDevices API: <strong className={navigator.mediaDevices ? 'text-emerald-400' : 'text-red-400'}>{navigator.mediaDevices ? 'AVAILABLE' : 'UNAVAILABLE'}</strong></div>
-            <div>Active State: <strong className="text-white">{isActive ? 'ACTIVE' : 'IDLE'}</strong></div>
-            <div>Video Resolution: <strong className="text-white">{cameraResolution || '0x0'}</strong></div>
-            <div>Video Paused: <strong className={isVideoPaused ? 'text-amber-400' : 'text-emerald-400'}>{isVideoPaused ? 'YES' : 'NO'}</strong></div>
-            <div>Devices Found: <strong className="text-white">{availableDevices.length}</strong></div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, color: '#cbd5e1', marginBottom: 6, fontSize: 9 }}>
+            <span>HTTPS: <strong style={{ color: window.isSecureContext ? '#34d399' : '#f87171' }}>{window.isSecureContext ? 'YES ✓' : 'NO ✗'}</strong></span>
+            <span>Camera API: <strong style={{ color: navigator.mediaDevices ? '#34d399' : '#f87171' }}>{navigator.mediaDevices ? 'OK ✓' : 'MISSING ✗'}</strong></span>
+            <span>State: <strong style={{ color: '#fff' }}>{isActive ? 'ACTIVE' : 'IDLE'}</strong></span>
+            <span>Resolution: <strong style={{ color: '#fff' }}>{resolution || 'N/A'}</strong></span>
           </div>
-          <div className="max-h-24 overflow-y-auto bg-slate-950/90 p-1.5 rounded border border-slate-800 flex flex-col gap-0.5 text-slate-400 text-[9px]">
-            {diagnosticLogs.length === 0 ? (
-              <span>No logs recorded yet. Click "START CAMERA" to see initialization steps.</span>
-            ) : (
-              diagnosticLogs.map((l, i) => <div key={i}>{l}</div>)
-            )}
+          <div style={{ maxHeight: 80, overflowY: 'auto', background: '#0f172a', padding: 4,
+            borderRadius: 4, color: '#94a3b8', fontSize: 9 }}>
+            {diagLogs.length === 0
+              ? 'No logs. Click START CAMERA.'
+              : diagLogs.map((l, i) => <div key={i}>{l}</div>)}
           </div>
         </div>
       )}
 
-      {/* Main Viewport: Native Video Layer (Bottom) + Transparent Skeleton Canvas Layer (Top) */}
-      <div className="relative w-full aspect-[16/9] max-h-[225px] rounded-lg overflow-hidden border-2 border-slate-700 bg-black flex items-center justify-center shadow-lg">
-        {/* 1. Real Native HTML5 Video Element */}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className={`absolute inset-0 w-full h-full object-cover transform scale-x-[-1] transition-opacity duration-200 ${
-            isActive ? 'opacity-100' : 'opacity-0 pointer-events-none'
-          }`}
-        />
-
-        {/* 2. Transparent Interactive 8-Drum Skeleton Overlay Canvas */}
+      {/* ── SINGLE CANVAS: video + zones drawn together ── */}
+      <div style={{ position: 'relative', borderRadius: 8, overflow: 'hidden',
+        border: '2px solid #334155', background: '#000' }}>
         <canvas
-          ref={overlayCanvasRef}
+          ref={canvasRef}
           width={640}
           height={360}
           onClick={handleCanvasClick}
-          className="absolute inset-0 w-full h-full object-cover cursor-pointer select-none z-10"
-          title="Click or strike any drum zone"
+          style={{ display: 'block', width: '100%', cursor: 'pointer' }}
+          title="Click any zone to play it. Move in front of camera to trigger motion detection."
         />
-
-        {/* If Video is Paused by browser */}
-        {isActive && isVideoPaused && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            <button
-              onClick={resumeVideo}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg"
-            >
-              <Play className="w-4 h-4 fill-white" />
-              <span>Resume Camera Feed</span>
-            </button>
+        {!isActive && !isDemoMode && (
+          <div style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)',
+            background: 'rgba(0,0,0,0.8)', border: '1px solid #334155', borderRadius: 6,
+            padding: '4px 12px', color: '#64748b', fontSize: 10, fontFamily: 'monospace',
+            whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+            Click zone to play · START CAMERA for motion detection · DEMO MODE to preview
           </div>
         )}
-
-        {/* Top Floating Guide */}
-        <div className="absolute top-1.5 left-1/2 -translate-x-1/2 pointer-events-none px-2.5 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-slate-700/80 flex items-center gap-2 text-[9px] font-mono-code text-slate-300 shadow-md z-20">
-          <span className="flex items-center gap-1 text-cyan-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-            CYAN = LEFT HAND [D/F]
-          </span>
-          <span className="text-slate-500">•</span>
-          <span className="flex items-center gap-1 text-orange-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
-            ORANGE = RIGHT HAND [J/K]
-          </span>
-        </div>
       </div>
 
-      {/* 8 Drum Part Live Status Buttons */}
-      <div className="grid grid-cols-4 sm:grid-cols-8 gap-1 text-[9px] font-mono-code">
-        {AIR_ZONES.map((zone) => {
-          const assignedHand = getInstrumentHand(zone.id, handedness, invertHands);
-          const isRight = assignedHand === 'RIGHT';
-          const motion = zoneMotionLevels[zone.id] || 0;
-          const isFlashing = zoneFlashes[zone.id];
-          const hitCount = zoneHitCounts[zone.id] || 0;
-
+      {/* ── 8-ZONE STATUS GRID ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 4, fontFamily: 'monospace' }}>
+        {ZONES.map(z => {
+          const hand = getInstrumentHand(z.id, handedness, invertHands);
+          const isRight = hand === 'RIGHT';
+          const flashing = performance.now() - (flashRef.current[z.id] || 0) < 220;
+          const motion = motionDisplay[z.id] || 0;
+          const hits = hitDisplay[z.id] || 0;
           return (
-            <button
-              key={zone.id}
-              onClick={() => triggerStrike(zone.id)}
-              className={`flex flex-col items-center justify-between p-1 rounded-lg border transition-all active:scale-95 ${
-                isFlashing
-                  ? 'bg-white text-black border-white shadow-[0_0_10px_#FFF]'
-                  : isRight
-                  ? 'bg-orange-950/40 border-orange-500/50 text-orange-200 hover:border-orange-400'
-                  : 'bg-cyan-950/40 border-cyan-500/50 text-cyan-200 hover:border-cyan-400'
-              }`}
-              title={`Click or strike ${zone.name} in the air`}
-            >
-              <span className="font-bold truncate w-full text-center">{zone.shortName}</span>
-              <div className="w-full h-1 rounded-full bg-slate-900 overflow-hidden my-0.5">
-                <div
-                  className={`h-full ${isRight ? 'bg-orange-500' : 'bg-cyan-400'} transition-all duration-75`}
-                  style={{ width: `${Math.min(100, motion)}%` }}
-                />
+            <button key={z.id} onClick={() => fireStrike(z.id)}
+              style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+                padding: '4px 2px', borderRadius: 6, cursor: 'pointer', transition: 'all 0.1s',
+                border: `1px solid ${flashing ? '#fff' : isRight ? '#f9731688' : '#06b6d488'}`,
+                background: flashing ? '#fff' : isRight ? '#43140733' : '#08334433',
+                color: flashing ? '#000' : isRight ? '#fdba74' : '#67e8f9',
+              }}>
+              <span style={{ fontSize: 9, fontWeight: 700 }}>{z.label}</span>
+              <div style={{ width: '80%', height: 3, background: '#1e293b', borderRadius: 2, overflow: 'hidden' }}>
+                <div style={{ width: `${motion}%`, height: '100%',
+                  background: isRight ? '#f97316' : '#22d3ee', transition: 'width 60ms' }} />
               </div>
-              <span className="text-[8px] opacity-75">{hitCount > 0 ? `${hitCount} hits` : (isRight ? 'RH' : 'LH')}</span>
+              <span style={{ fontSize: 8, opacity: 0.7 }}>{hits > 0 ? `${hits}×` : (isRight ? 'RH' : 'LH')}</span>
             </button>
           );
         })}
       </div>
 
-      {/* Mode & Sensitivity Controls */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 bg-slate-950/80 p-1.5 rounded-lg border border-slate-800 text-xs">
-        {/* Tracking Mode */}
-        <div className="flex flex-col gap-0.5">
-          <span className="font-mono-code font-bold text-slate-300 flex items-center gap-1 text-[10px]">
-            <HandIcon className="w-3 h-3 text-cyan-400" />
-            TRACKING TYPE:
-          </span>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => {
-                setTrackingMode('fingers');
-                setSensitivity(70);
-              }}
-              className={`flex-1 py-0.5 rounded font-display font-bold text-[10px] transition-all ${
-                trackingMode === 'fingers'
-                  ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-black shadow-[0_0_6px_#00E5FF]'
-                  : 'bg-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              👉 INDEX FINGERS
-            </button>
-            <button
-              onClick={() => {
-                setTrackingMode('sticks');
-                setSensitivity(60);
-              }}
-              className={`flex-1 py-0.5 rounded font-display font-bold text-[10px] transition-all ${
-                trackingMode === 'sticks'
-                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-black shadow-[0_0_6px_#FF6D00]'
-                  : 'bg-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              🥢 DRUMSTICKS
-            </button>
-          </div>
+      {/* ── SENSITIVITY ── */}
+      <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10,
+          fontFamily: 'monospace', color: '#94a3b8', marginBottom: 4 }}>
+          <span>🎚 MOTION SENSITIVITY</span>
+          <span style={{ color: '#22d3ee', fontWeight: 700 }}>{sensitivity}%</span>
         </div>
-
-        {/* Motion Sensitivity */}
-        <div className="flex flex-col gap-0.5">
-          <div className="flex justify-between font-mono-code text-slate-300 text-[10px]">
-            <span className="flex items-center gap-1">
-              <Sliders className="w-3 h-3 text-amber-400" />
-              SENSITIVITY:
-            </span>
-            <span className="text-cyan-400 font-bold">{sensitivity}%</span>
-          </div>
-          <input
-            type="range"
-            min="20"
-            max="95"
-            value={sensitivity}
-            onChange={(e) => setSensitivity(Number(e.target.value))}
-            className="w-full accent-cyan-400 cursor-pointer h-1 bg-slate-800 rounded-lg"
-          />
-          <div className="flex justify-between text-[8px] font-mono-code text-slate-400">
-            <button onClick={() => setSensitivity(45)} className="hover:text-white">Normal (45%)</button>
-            <button onClick={() => setSensitivity(65)} className="hover:text-white font-bold text-amber-300">Responsive (65%)</button>
-            <button onClick={() => setSensitivity(85)} className="hover:text-white">Ultra (85%)</button>
-          </div>
+        <input type="range" min={20} max={90} value={sensitivity}
+          onChange={e => setSensitivity(+e.target.value)}
+          style={{ width: '100%', accentColor: '#22d3ee', cursor: 'pointer' }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9,
+          fontFamily: 'monospace', color: '#475569', marginTop: 2 }}>
+          <button onClick={() => setSensitivity(40)}
+            style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 9 }}>
+            Low (40%)
+          </button>
+          <button onClick={() => setSensitivity(60)}
+            style={{ background: 'none', border: 'none', color: '#fbbf24', cursor: 'pointer', fontSize: 9, fontWeight: 700 }}>
+            Default (60%)
+          </button>
+          <button onClick={() => setSensitivity(80)}
+            style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 9 }}>
+            High (80%)
+          </button>
         </div>
       </div>
     </div>
