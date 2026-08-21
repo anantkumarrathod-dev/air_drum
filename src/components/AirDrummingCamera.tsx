@@ -166,6 +166,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     }
 
     let stream: MediaStream | null = null;
+    let caughtError: unknown = null;
 
     // Strategy 1: Ideal Resolution & Device (never throws OverconstrainedError)
     try {
@@ -179,21 +180,38 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       log(`Connecting camera with ideal constraints...`);
       stream = await navigator.mediaDevices.getUserMedia({ video: videoConfig, audio: false });
     } catch (firstErr) {
+      caughtError = firstErr;
       log(`Ideal constraint attempt note: ${firstErr}. Trying standard fallback...`);
       try {
         stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       } catch (secondErr) {
+        caughtError = secondErr;
         log(`Standard fallback failed: ${secondErr}`);
       }
     }
 
     if (!stream) {
       const isSecure = window.isSecureContext;
-      const err = !isSecure
-        ? 'Camera blocked because this page is not on HTTPS. Please open the HTTPS link.'
-        : 'Camera permission denied or camera is in use by another app. Please allow camera permissions in your browser address bar.';
-      setCameraError(err);
-      log(`ERROR: ${err}`);
+      const errName = (caughtError as { name?: string })?.name || '';
+      const errMsg = (caughtError as Error)?.message || String(caughtError);
+
+      let userAdvice = 'Camera access failed.';
+      if (!isSecure) {
+        userAdvice = '🔒 Camera blocked: Page is running on insecure HTTP. Please use the HTTPS link.';
+      } else if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
+        userAdvice = '🚫 Camera permission blocked. Click the lock/settings icon in your browser address bar → Set Camera to "Allow" → Retry.';
+      } else if (errName === 'NotReadableError' || errName === 'AbortError' || errName === 'TrackStartError') {
+        userAdvice = '🔌 Camera is locked by another application (e.g. Zoom, MS Teams, Skype, or Windows Camera). Please close other video apps and retry.';
+      } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+        userAdvice = '📷 No camera hardware detected. If using an external USB camera, check your USB connection.';
+      } else if (errName === 'OverconstrainedError') {
+        userAdvice = '⚙️ Camera resolution constraint not supported. Falling back to default...';
+      } else {
+        userAdvice = `⚠️ Camera error (${errName || 'Notice'}): ${errMsg || 'Please allow camera access in browser.'}`;
+      }
+
+      setCameraError(userAdvice);
+      log(`ERROR (${errName}): ${errMsg}`);
       setIsStarting(false);
       return;
     }
@@ -208,6 +226,21 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       }
       setDeviceLabel(track.label || 'Webcam / External USB Camera');
       log(`Camera Live: "${track.label || 'Webcam'}" (Ready: ${track.readyState})`);
+
+      // Hardware disconnection & mute listeners
+      track.onended = () => {
+        log('Camera track ended (hardware disconnected or permission revoked).');
+        stopCamera();
+        setCameraError('Camera was disconnected. Reconnect USB camera and click Start Camera.');
+      };
+
+      track.onmute = () => {
+        log('Notice: Camera track muted (hardware privacy shutter or background mode).');
+      };
+
+      track.onunmute = () => {
+        log('Notice: Camera track unmuted.');
+      };
     }
 
     // Attach stream to <video> element with full cross-browser mobile/desktop attributes
