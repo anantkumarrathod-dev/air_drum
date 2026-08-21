@@ -623,30 +623,43 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
       {/* ── 8-ZONE DRUM SKELETON & VIDEO VIEWPORT ── */}
       <div className="relative w-full flex-1 min-h-[300px] sm:min-h-[400px] rounded-2xl border-2 border-slate-800 bg-[#03060f] overflow-hidden shadow-inner flex items-center justify-center">
-        {/* Live Camera Video Feed (Mirrored or Normal) */}
+        {/* Live Camera Video Feed (Mirrored or Normal) with Guaranteed Direct Inline Styling */}
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          style={{ transform: isMirrored ? 'scaleX(-1)' : 'none' }}
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 z-0 ${
-            isActive ? 'opacity-100' : 'opacity-0 pointer-events-none'
-          }`}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            transform: isMirrored ? 'scaleX(-1)' : 'none',
+            zIndex: 1,
+            display: isActive ? 'block' : 'none',
+            backgroundColor: '#000000',
+          }}
         />
 
-        {/* Ambient Drum Stage Lighting Background (Shown ONLY when camera is off) */}
+        {/* Ambient Drum Stage Lighting Background (Shown ONLY when camera is in standby) */}
         {!isActive && (
           <div
-            className="absolute inset-0 pointer-events-none z-0"
             style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 1,
+              pointerEvents: 'none',
               background: 'radial-gradient(circle at 50% 40%, #0d1e38 0%, #060b18 60%, #02040a 100%)',
             }}
           >
             {/* Subtle Isometric Grid Lines */}
             <div
-              className="absolute inset-0 opacity-15"
               style={{
+                position: 'absolute',
+                inset: 0,
+                opacity: 0.15,
                 backgroundImage: 'linear-gradient(rgba(0,229,255,0.2) 1px, transparent 1px), linear-gradient(90deg, rgba(0,229,255,0.2) 1px, transparent 1px)',
                 backgroundSize: '48px 48px',
               }}
