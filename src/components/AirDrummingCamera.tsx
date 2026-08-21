@@ -647,7 +647,10 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             <div
               key={zone.id}
               onClick={() => fireStrike(zone.id)}
-              onTouchStart={() => fireStrike(zone.id)}
+              onTouchStart={(e) => {
+                e.preventDefault();
+                fireStrike(zone.id);
+              }}
               style={{
                 position: 'absolute',
                 left: zone.left,
