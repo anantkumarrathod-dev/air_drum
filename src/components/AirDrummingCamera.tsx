@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { DrumInstrumentId, Hand, Handedness } from '../types/drum';
 import { getInstrumentHand } from '../data/beatLibrary';
-import { Camera, Sparkles, Square, Maximize2, Minimize2, Activity, RefreshCw, Video, AlertCircle } from 'lucide-react';
+import { Camera, Sparkles, Square, Maximize2, Minimize2, Activity, RefreshCw, Video, AlertCircle, Wrench } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
@@ -50,6 +50,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [fps, setFps] = useState<number>(0);
   const [resolution, setResolution] = useState<string>('');
   const [deviceLabel, setDeviceLabel] = useState<string>('');
+  const [brightnessVal, setBrightnessVal] = useState<number>(0);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isMirrored, setIsMirrored] = useState<boolean>(true);
 
@@ -58,6 +59,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const viewCanvasRef = useRef<HTMLCanvasElement>(null);
   const procRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const prevFrame = useRef<Uint8ClampedArray | null>(null);
@@ -79,7 +81,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       const allDevices = await navigator.mediaDevices.enumerateDevices();
       const videoInputs = allDevices.filter((d) => d.kind === 'videoinput');
       setAvailableDevices(videoInputs);
-      log(`Detected ${videoInputs.length} camera(s).`);
+      log(`Detected ${videoInputs.length} camera device(s).`);
     } catch (err) {
       log(`enumerateDevices notice: ${err}`);
     }
@@ -99,13 +101,13 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const fireStrike = useCallback(
     (id: DrumInstrumentId) => {
       const now = performance.now();
-      if (now - (lastHit.current[id] || 0) < 170) return;
+      if (now - (lastHit.current[id] || 0) < 160) return;
       lastHit.current[id] = now;
 
       setFlashes((prev) => ({ ...prev, [id]: true }));
       setTimeout(() => {
         setFlashes((prev) => ({ ...prev, [id]: false }));
-      }, 220);
+      }, 200);
 
       setHitCounts((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
 
@@ -141,15 +143,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     return () => clearInterval(interval);
   }, [isDemoMode, fireStrike]);
 
-  // ── Unified Camera Stream Starter (Cross-Device: iOS, Android, Desktop, USB) ──
-  const startCamera = async (targetDeviceId?: string) => {
+  // ── Bulletproof Camera Stream Starter (Direct Canvas Pipeline) ──────────────
+  const startCamera = async (targetDeviceId?: string, forceFallbackVGA: boolean = false) => {
     setCameraError(null);
     setIsStarting(true);
     setIsDemoMode(false);
     prevFrame.current = null;
 
     const deviceToUse = targetDeviceId || selectedDeviceId;
-    log(`Requesting camera feed (Device: ${deviceToUse ? deviceToUse.slice(0, 8) + '...' : 'Default / External'})...`);
+    log(`Starting camera (Device: ${deviceToUse ? deviceToUse.slice(0, 8) + '...' : 'Default / External'})...`);
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       const err = 'Camera API is unavailable. Browsers require HTTPS (like GitHub Pages) or localhost to access cameras.';
@@ -168,25 +170,30 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     let stream: MediaStream | null = null;
     let caughtError: unknown = null;
 
-    // Strategy 1: Ideal Resolution & Device (never throws OverconstrainedError)
-    try {
-      const videoConfig: MediaTrackConstraints = {};
-      if (deviceToUse) {
-        videoConfig.deviceId = { ideal: deviceToUse };
-      }
-      videoConfig.width = { ideal: 1280 };
-      videoConfig.height = { ideal: 720 };
-
-      log(`Connecting camera with ideal constraints...`);
-      stream = await navigator.mediaDevices.getUserMedia({ video: videoConfig, audio: false });
-    } catch (firstErr) {
-      caughtError = firstErr;
-      log(`Ideal constraint attempt note: ${firstErr}. Trying standard fallback...`);
+    if (!forceFallbackVGA) {
       try {
+        const videoConfig: MediaTrackConstraints = {};
+        if (deviceToUse) {
+          videoConfig.deviceId = { ideal: deviceToUse };
+        }
+        videoConfig.width = { ideal: 1280 };
+        videoConfig.height = { ideal: 720 };
+
+        log(`Connecting camera with 720p ideal constraints...`);
+        stream = await navigator.mediaDevices.getUserMedia({ video: videoConfig, audio: false });
+      } catch (firstErr) {
+        caughtError = firstErr;
+        log(`720p attempt note: ${firstErr}. Trying standard fallback...`);
+      }
+    }
+
+    if (!stream) {
+      try {
+        log(`Attempting basic video stream fallback...`);
         stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       } catch (secondErr) {
         caughtError = secondErr;
-        log(`Standard fallback failed: ${secondErr}`);
+        log(`Basic fallback failed: ${secondErr}`);
       }
     }
 
@@ -205,7 +212,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
         userAdvice = '📷 No camera hardware detected. If using an external USB camera, check your USB connection.';
       } else if (errName === 'OverconstrainedError') {
-        userAdvice = '⚙️ Camera resolution constraint not supported. Falling back to default...';
+        userAdvice = '⚙️ Camera resolution constraint not supported. Falling back to standard mode...';
       } else {
         userAdvice = `⚠️ Camera error (${errName || 'Notice'}): ${errMsg || 'Please allow camera access in browser.'}`;
       }
@@ -225,9 +232,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         setSelectedDeviceId(activeDevId);
       }
       setDeviceLabel(track.label || 'Webcam / External USB Camera');
-      log(`Camera Live: "${track.label || 'Webcam'}" (Ready: ${track.readyState})`);
+      log(`Camera Live: "${track.label || 'Webcam'}" (State: ${track.readyState})`);
 
-      // Hardware disconnection & mute listeners
       track.onended = () => {
         log('Camera track ended (hardware disconnected or permission revoked).');
         stopCamera();
@@ -243,7 +249,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       };
     }
 
-    // Attach stream to <video> element with full cross-browser mobile/desktop attributes
+    // Attach stream to decoder video element
     const videoEl = videoRef.current;
     if (videoEl) {
       videoEl.srcObject = stream;
@@ -257,7 +263,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       const applyResolution = () => {
         if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
           setResolution(`${videoEl.videoWidth}×${videoEl.videoHeight}`);
-          log(`Video stream resolution confirmed: ${videoEl.videoWidth}×${videoEl.videoHeight}`);
+          log(`Video stream confirmed: ${videoEl.videoWidth}×${videoEl.videoHeight}`);
         }
       };
 
@@ -278,16 +284,16 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
       try {
         await videoEl.play();
-        log('video.play() resolved successfully.');
+        log('Decoder video.play() active.');
       } catch (playErr) {
-        log(`video.play() waiting on metadata: ${playErr}`);
+        log(`video.play() waiting on stream: ${playErr}`);
       }
     }
 
     setIsActive(true);
     setIsStarting(false);
 
-    // Refresh device list to populate names now that permission is granted
+    // Refresh device list to populate names
     await refreshDevices();
   };
 
@@ -330,10 +336,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     };
   }, []);
 
-  // ── Real-time Motion Detection Loop ─────────────────────────────────────────
+  // ── High-Performance Direct Canvas Video Rendering & Motion Loop ───────────
   useEffect(() => {
-    if (!isActive) return;
-
     if (!procRef.current) {
       procRef.current = document.createElement('canvas');
       procRef.current.width = 160;
@@ -346,7 +350,55 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     const loop = () => {
       rafRef.current = requestAnimationFrame(loop);
       const v = videoRef.current;
-      if (!v || v.readyState < 2 || v.videoWidth === 0) return;
+      const viewCanvas = viewCanvasRef.current;
+
+      // ── 1. RENDER DIRECT TO VISIBLE CANVAS ──
+      if (viewCanvas) {
+        const ctx = viewCanvas.getContext('2d', { alpha: false });
+        if (ctx) {
+          const cw = viewCanvas.width;
+          const ch = viewCanvas.height;
+
+          if (isActive && v && v.readyState >= 2 && v.videoWidth > 0) {
+            // Draw live video frame directly to screen canvas
+            ctx.save();
+            if (isMirrored) {
+              ctx.translate(cw, 0);
+              ctx.scale(-1, 1);
+            }
+            ctx.drawImage(v, 0, 0, cw, ch);
+            ctx.restore();
+          } else if (!isActive) {
+            // Draw ambient holographic drum stage
+            const grad = ctx.createRadialGradient(cw * 0.5, ch * 0.4, 10, cw * 0.5, ch * 0.4, cw * 0.7);
+            grad.addColorStop(0, '#0d1e38');
+            grad.addColorStop(0.6, '#060b18');
+            grad.addColorStop(1, '#02040a');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, cw, ch);
+
+            // Grid lines
+            ctx.strokeStyle = 'rgba(0, 229, 255, 0.08)';
+            ctx.lineWidth = 1;
+            const step = 48;
+            for (let x = 0; x < cw; x += step) {
+              ctx.beginPath();
+              ctx.moveTo(x, 0);
+              ctx.lineTo(x, ch);
+              ctx.stroke();
+            }
+            for (let y = 0; y < ch; y += step) {
+              ctx.beginPath();
+              ctx.moveTo(0, y);
+              ctx.lineTo(cw, y);
+              ctx.stroke();
+            }
+          }
+        }
+      }
+
+      // ── 2. OPTICAL FLOW MOTION SENSING ──
+      if (!isActive || !v || v.readyState < 2 || v.videoWidth === 0) return;
 
       frames++;
       const now = performance.now();
@@ -359,7 +411,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       const pCtx = proc.getContext('2d', { willReadFrequently: true });
       if (!pCtx) return;
 
-      // Draw video frame to processing canvas
       pCtx.save();
       if (isMirrored) {
         pCtx.translate(160, 0);
@@ -372,8 +423,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       const prev = prevFrame.current;
 
       if (prev && prev.length === frame.length) {
-        const threshold = 75 + (100 - sensRef.current) * 6;
+        const threshold = 60 + (100 - sensRef.current) * 5;
         const newMotions: Record<string, number> = {};
+        let totalLum = 0;
 
         AIR_ZONES.forEach((z) => {
           const x0 = Math.round((parseFloat(z.left) / 100) * 160);
@@ -385,10 +437,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           for (let py = y0; py < y1; py += 2) {
             for (let px = x0; px < x1; px += 2) {
               const i = (py * 160 + px) * 4;
+              const r = frame[i];
+              const g = frame[i + 1];
+              const b = frame[i + 2];
+              totalLum += (r + g + b) / 3;
+
               const d =
-                Math.abs(frame[i] - prev[i]) +
-                Math.abs(frame[i + 1] - prev[i + 1]) +
-                Math.abs(frame[i + 2] - prev[i + 2]);
+                Math.abs(r - prev[i]) +
+                Math.abs(g - prev[i + 1]) +
+                Math.abs(b - prev[i + 2]);
               if (d > 22) diffSum += d;
             }
           }
@@ -402,6 +459,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         });
 
         setMotions(newMotions);
+        setBrightnessVal(Math.round(totalLum / ((160 * 90) / 4)));
       }
 
       prevFrame.current = new Uint8ClampedArray(frame);
@@ -431,6 +489,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       onContextMenu={(e) => e.preventDefault()}
       className="w-full h-full flex-1 flex flex-col min-h-0 bg-[#070b14] rounded-2xl border border-slate-800/90 p-2 sm:p-3 select-none gap-2 shadow-2xl overflow-hidden font-mono-code"
     >
+      {/* ── HIDDEN HARDWARE DECODER VIDEO ELEMENT ── */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="hidden"
+      />
+
       {/* ── TOP CONTROL BAR ── */}
       <div className="shrink-0 flex items-center justify-between flex-wrap gap-2 bg-[#0c1222] border border-slate-800 rounded-xl px-3 py-2">
         {/* Left: Title & Status Badge */}
@@ -448,7 +515,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               {isActive && (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950/90 text-emerald-300 border border-emerald-500/50 flex items-center gap-1 shadow-[0_0_8px_rgba(16,185,129,0.4)]">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  LIVE {resolution} • {fps} FPS
+                  CANVAS LIVE {resolution} • {fps} FPS
                 </span>
               )}
               {isDemoMode && (
@@ -575,6 +642,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
+              onClick={() => startCamera(undefined, true)}
+              className="px-3 py-1 rounded-lg bg-cyan-900 hover:bg-cyan-800 text-cyan-200 font-bold text-xs flex items-center gap-1"
+            >
+              <Wrench className="w-3 h-3" /> Fix Video / Standard Mode
+            </button>
+            <button
               onClick={() => startCamera()}
               className="px-3 py-1 rounded-lg bg-red-800 hover:bg-red-700 text-white font-bold text-xs"
             >
@@ -598,9 +671,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         <div className="shrink-0 p-3 rounded-xl bg-black/90 border border-amber-500/50 text-amber-300 text-xs shadow-xl animate-in slide-in-from-top-2">
           <div className="flex items-center justify-between border-b border-amber-500/30 pb-1.5 mb-2 font-bold">
             <span className="flex items-center gap-1.5">
-              <Activity className="w-4 h-4 text-amber-400" /> SYSTEM DIAGNOSTICS & CAMERAS
+              <Activity className="w-4 h-4 text-amber-400" /> SYSTEM DIAGNOSTICS & HARDWARE
             </span>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => startCamera(undefined, true)}
+                className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-500/50 text-cyan-300 text-[10px] font-bold"
+              >
+                Force Standard VGA Mode
+              </button>
               <button onClick={() => setDiagLogs([])} className="text-slate-400 hover:text-white text-[10px]">
                 Clear Logs
               </button>
@@ -612,8 +691,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] text-slate-300 mb-2">
             <div>HTTPS Context: <b className={window.isSecureContext ? 'text-emerald-400' : 'text-red-400'}>{window.isSecureContext ? 'SECURE (HTTPS) ✓' : 'INSECURE (HTTP) ✗'}</b></div>
             <div>Cameras Detected: <b className="text-cyan-300">{availableDevices.length} device(s)</b></div>
-            <div>Camera State: <b className="text-white">{isActive ? 'ACTIVE (STREAMING)' : 'OFF / STANDBY'}</b></div>
-            <div>Resolution: <b className="text-white">{resolution || 'N/A'}</b></div>
+            <div>Camera State: <b className="text-white">{isActive ? 'ACTIVE (CANVAS RENDERER)' : 'OFF / STANDBY'}</b></div>
+            <div>Resolution & Light: <b className="text-white">{resolution || 'N/A'} {brightnessVal > 0 ? `(Lum: ${brightnessVal})` : ''}</b></div>
           </div>
           <div className="max-h-28 overflow-y-auto bg-slate-950 p-2 rounded-lg text-[10px] text-slate-400 space-y-0.5">
             {diagLogs.length === 0 ? <p>No events logged yet. Click START CAMERA or DEMO MODE.</p> : diagLogs.map((l, i) => <div key={i}>{l}</div>)}
@@ -621,51 +700,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         </div>
       )}
 
-      {/* ── 8-ZONE DRUM SKELETON & VIDEO VIEWPORT ── */}
+      {/* ── 8-ZONE DRUM SKELETON & DIRECT CANVAS VIEWPORT ── */}
       <div className="relative w-full flex-1 min-h-[300px] sm:min-h-[400px] rounded-2xl border-2 border-slate-800 bg-[#03060f] overflow-hidden shadow-inner flex items-center justify-center">
-        {/* Live Camera Video Feed (Mirrored or Normal) with Guaranteed Direct Inline Styling */}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            transform: isMirrored ? 'scaleX(-1)' : 'none',
-            zIndex: 1,
-            display: isActive ? 'block' : 'none',
-            backgroundColor: '#000000',
-          }}
+        {/* Direct Hardware-Accelerated Viewport Canvas (Guaranteed 100% Video Frame Rendering) */}
+        <canvas
+          ref={viewCanvasRef}
+          width={1280}
+          height={720}
+          className="absolute inset-0 w-full h-full object-cover z-0 pointer-events-none"
         />
-
-        {/* Ambient Drum Stage Lighting Background (Shown ONLY when camera is in standby) */}
-        {!isActive && (
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              zIndex: 1,
-              pointerEvents: 'none',
-              background: 'radial-gradient(circle at 50% 40%, #0d1e38 0%, #060b18 60%, #02040a 100%)',
-            }}
-          >
-            {/* Subtle Isometric Grid Lines */}
-            <div
-              style={{
-                position: 'absolute',
-                inset: 0,
-                opacity: 0.15,
-                backgroundImage: 'linear-gradient(rgba(0,229,255,0.2) 1px, transparent 1px), linear-gradient(90deg, rgba(0,229,255,0.2) 1px, transparent 1px)',
-                backgroundSize: '48px 48px',
-              }}
-            />
-          </div>
-        )}
 
         {/* Top Legend Bar */}
         <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1 rounded-full bg-black/80 border border-slate-700/80 backdrop-blur-md shadow-lg flex items-center gap-3 text-[10px] font-bold">
@@ -720,7 +763,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                   background: isFlashing
                     ? 'rgba(255,255,255,0.4)'
                     : isActive
-                    ? 'rgba(0,0,0,0.15)' // Clean translucent glass over camera feed
+                    ? 'rgba(0,0,0,0.12)' // Crystal clear translucent glass over canvas
                     : isRight
                     ? 'radial-gradient(circle, rgba(255,109,0,0.22) 0%, rgba(255,109,0,0.08) 70%, rgba(0,0,0,0.4) 100%)'
                     : 'radial-gradient(circle, rgba(0,229,255,0.22) 0%, rgba(0,229,255,0.08) 70%, rgba(0,0,0,0.4) 100%)',
