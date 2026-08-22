@@ -359,15 +359,17 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           const cw = viewCanvas.width;
           const ch = viewCanvas.height;
 
-          if (isActive && v && v.readyState >= 2 && v.videoWidth > 0) {
-            // Draw live video frame directly to screen canvas
-            ctx.save();
-            if (isMirrored) {
-              ctx.translate(cw, 0);
-              ctx.scale(-1, 1);
-            }
-            ctx.drawImage(v, 0, 0, cw, ch);
-            ctx.restore();
+          if (isActive && v && (v.readyState >= 1 || v.videoWidth > 0)) {
+            try {
+              // Draw live video frame directly to screen canvas
+              ctx.save();
+              if (isMirrored) {
+                ctx.translate(cw, 0);
+                ctx.scale(-1, 1);
+              }
+              ctx.drawImage(v, 0, 0, cw, ch);
+              ctx.restore();
+            } catch (e) {}
           } else if (!isActive) {
             // Draw ambient holographic drum stage
             const grad = ctx.createRadialGradient(cw * 0.5, ch * 0.4, 10, cw * 0.5, ch * 0.4, cw * 0.7);
@@ -489,14 +491,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       onContextMenu={(e) => e.preventDefault()}
       className="w-full h-full flex-1 flex flex-col min-h-0 bg-[#070b14] rounded-2xl border border-slate-800/90 p-2 sm:p-3 select-none gap-2 shadow-2xl overflow-hidden font-mono-code"
     >
-      {/* ── HIDDEN HARDWARE DECODER VIDEO ELEMENT ── */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className="hidden"
-      />
+
 
       {/* ── TOP CONTROL BAR ── */}
       <div className="shrink-0 flex items-center justify-between flex-wrap gap-2 bg-[#0c1222] border border-slate-800 rounded-xl px-3 py-2">
@@ -702,12 +697,38 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
       {/* ── 8-ZONE DRUM SKELETON & DIRECT CANVAS VIEWPORT ── */}
       <div className="relative w-full flex-1 min-h-[300px] sm:min-h-[400px] rounded-2xl border-2 border-slate-800 bg-[#03060f] overflow-hidden shadow-inner flex items-center justify-center">
-        {/* Direct Hardware-Accelerated Viewport Canvas (Guaranteed 100% Video Frame Rendering) */}
+        {/* Hardware Video Stream Layer (Always active in DOM so browser hardware decoder runs) */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            transform: isMirrored ? 'scaleX(-1)' : 'none',
+            zIndex: 1,
+            display: isActive ? 'block' : 'none',
+          }}
+        />
+
+        {/* Direct Hardware-Accelerated Viewport Canvas */}
         <canvas
           ref={viewCanvasRef}
           width={1280}
           height={720}
-          className="absolute inset-0 w-full h-full object-cover z-0 pointer-events-none"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            zIndex: 2,
+            pointerEvents: 'none',
+          }}
         />
 
         {/* Top Legend Bar */}
