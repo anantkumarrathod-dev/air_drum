@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { DrumInstrumentId, Hand, Handedness } from '../types/drum';
 import { getInstrumentHand } from '../data/beatLibrary';
-import { Camera, Square, RefreshCw, Video, AlertCircle, Layers, Maximize2, Minimize2 } from 'lucide-react';
+import { Camera, Square, RefreshCw, Video, AlertCircle, Layers, Maximize2, Minimize2, Play, Activity } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
@@ -35,7 +35,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   handedness = 'RIGHT_HANDED',
   invertHands = false,
 }) => {
-  const [isActive, setIsActive] = useState<boolean>(false);
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [isStarting, setIsStarting] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [showZones, setShowZones] = useState<boolean>(true);
@@ -43,15 +43,16 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [flashes, setFlashes] = useState<Record<string, boolean>>({});
 
-  // Telemetry & Diagnostics
+  // Live Telemetry & Diagnostics
   const [resolution, setResolution] = useState<string>('0×0');
   const [deviceLabel, setDeviceLabel] = useState<string>('');
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
-  const [statusLog, setStatusLog] = useState<string>('Camera is ready to connect.');
+  const [statusLog, setStatusLog] = useState<string>('Ready to connect camera.');
+  const [showDiag, setShowDiag] = useState<boolean>(false);
+  const [videoStats, setVideoStats] = useState({ readyState: 0, paused: true, currentTime: 0 });
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
   const lastHit = useRef<Record<string, number>>({});
 
   // ── Strike Trigger ──────────────────────────────────────────────────────────
@@ -94,11 +95,58 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     }
   }, [refreshDevices]);
 
-  // ── Simple Meeting App Camera Starter ───────────────────────────────────────
+  // ── Declarative Video Binding Effect ────────────────────────────────────────
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    if (mediaStream) {
+      videoEl.srcObject = mediaStream;
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+
+      const updateDimensions = () => {
+        if (videoEl.videoWidth > 0) {
+          setResolution(`${videoEl.videoWidth}×${videoEl.videoHeight}`);
+          setStatusLog(`Streaming: ${videoEl.videoWidth}×${videoEl.videoHeight}`);
+        }
+      };
+
+      videoEl.onloadedmetadata = () => {
+        updateDimensions();
+        videoEl.play().catch((e) => console.log('play on loadedmetadata:', e));
+      };
+
+      videoEl.onloadeddata = updateDimensions;
+      videoEl.oncanplay = updateDimensions;
+      videoEl.play().catch(() => {});
+
+      // Watchdog interval to ensure stats are updated
+      const interval = setInterval(() => {
+        if (videoEl) {
+          setVideoStats({
+            readyState: videoEl.readyState,
+            paused: videoEl.paused,
+            currentTime: Math.round(videoEl.currentTime * 10) / 10,
+          });
+          if (videoEl.videoWidth > 0 && resolution === '0×0') {
+            setResolution(`${videoEl.videoWidth}×${videoEl.videoHeight}`);
+          }
+        }
+      }, 500);
+
+      return () => clearInterval(interval);
+    } else {
+      videoEl.srcObject = null;
+      setResolution('0×0');
+    }
+  }, [mediaStream, resolution]);
+
+  // ── Meeting App Camera Starter ──────────────────────────────────────────────
   const startCamera = async (targetDeviceId?: string) => {
     setCameraError(null);
     setIsStarting(true);
-    setStatusLog('Requesting camera permission from browser...');
+    setStatusLog('Requesting camera permission...');
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       const err = 'Camera API not supported or blocked by browser (requires HTTPS).';
@@ -108,10 +156,10 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       return;
     }
 
-    // Stop any existing stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
+    // Stop previous stream
+    if (mediaStream) {
+      mediaStream.getTracks().forEach((t) => t.stop());
+      setMediaStream(null);
     }
 
     const deviceId = targetDeviceId || selectedDeviceId;
@@ -122,7 +170,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
+      setMediaStream(stream);
 
       const track = stream.getVideoTracks()[0];
       if (track) {
@@ -136,26 +184,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         };
       }
 
-      const videoEl = videoRef.current;
-      if (videoEl) {
-        videoEl.srcObject = stream;
-        videoEl.muted = true;
-        videoEl.playsInline = true;
-
-        videoEl.onloadedmetadata = () => {
-          setResolution(`${videoEl.videoWidth}×${videoEl.videoHeight}`);
-          setStatusLog(`Streaming: ${videoEl.videoWidth}×${videoEl.videoHeight}`);
-          videoEl.play().catch(() => {});
-        };
-
-        try {
-          await videoEl.play();
-        } catch (e) {
-          console.log('video.play() promise:', e);
-        }
-      }
-
-      setIsActive(true);
       setIsStarting(false);
       await refreshDevices();
     } catch (err: unknown) {
@@ -175,14 +203,13 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
   // ── Stop Camera ─────────────────────────────────────────────────────────────
   const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
+    if (mediaStream) {
+      mediaStream.getTracks().forEach((t) => t.stop());
+      setMediaStream(null);
     }
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-    setIsActive(false);
     setIsStarting(false);
     setResolution('0×0');
     setStatusLog('Camera stopped.');
@@ -190,19 +217,25 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
   const handleDeviceChange = (newDeviceId: string) => {
     setSelectedDeviceId(newDeviceId);
-    if (isActive) {
+    if (mediaStream) {
       startCamera(newDeviceId);
+    }
+  };
+
+  const forcePlayVideo = () => {
+    if (videoRef.current) {
+      videoRef.current.play().catch((e) => console.log('forcePlay error:', e));
     }
   };
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((t) => t.stop());
       }
     };
-  }, []);
+  }, [mediaStream]);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -213,6 +246,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       setIsFullscreen(false);
     }
   };
+
+  const isActive = Boolean(mediaStream);
 
   return (
     <div
@@ -269,6 +304,18 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
         {/* Right: Master Control Buttons */}
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Force Play button if stream exists but paused */}
+          {isActive && videoStats.paused && (
+            <button
+              onClick={forcePlayVideo}
+              className="px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-[11px] font-bold flex items-center gap-1 shadow-md animate-pulse"
+              title="Click to unfreeze video"
+            >
+              <Play className="w-3 h-3 fill-current" />
+              <span>PLAY VIDEO</span>
+            </button>
+          )}
+
           {/* Toggle Drum Zones Overlay */}
           <button
             onClick={() => setShowZones((prev) => !prev)}
@@ -321,6 +368,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </button>
           )}
 
+          {/* Diagnostics toggle */}
+          <button
+            onClick={() => setShowDiag((prev) => !prev)}
+            className={`p-1.5 rounded-xl border text-xs ${showDiag ? 'bg-amber-950 text-amber-300 border-amber-500' : 'bg-slate-800 text-slate-400 border-slate-700'}`}
+            title="Toggle Live Telemetry"
+          >
+            <Activity className="w-3.5 h-3.5" />
+          </button>
+
           {/* Fullscreen Toggle */}
           <button
             onClick={toggleFullscreen}
@@ -348,9 +404,19 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         </div>
       )}
 
+      {/* ── LIVE TELEMETRY DRAWER ── */}
+      {showDiag && (
+        <div className="shrink-0 p-2.5 rounded-xl bg-black/90 border border-slate-700 text-[11px] text-slate-300 grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div>Stream: <b className={isActive ? 'text-emerald-400' : 'text-slate-500'}>{isActive ? 'ACTIVE' : 'OFF'}</b></div>
+          <div>Resolution: <b className="text-white">{resolution}</b></div>
+          <div>Player Ready: <b className="text-white">{videoStats.readyState} / 4</b></div>
+          <div>Player State: <b className={videoStats.paused ? 'text-amber-400' : 'text-emerald-400'}>{videoStats.paused ? 'PAUSED' : 'PLAYING'}</b></div>
+        </div>
+      )}
+
       {/* ── MEETING APP VIDEO VIEWPORT ── */}
       <div className="relative w-full flex-1 min-h-[320px] rounded-2xl border-2 border-slate-800 bg-[#050811] overflow-hidden flex items-center justify-center">
-        {/* Simple Direct HTML5 Video Player */}
+        {/* Simple Direct HTML5 Video Player (Always rendered in DOM, never display:none) */}
         <video
           ref={videoRef}
           autoPlay
@@ -362,13 +428,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             objectFit: 'contain',
             backgroundColor: '#050811',
             transform: isMirrored ? 'scaleX(-1)' : 'none',
-            display: isActive ? 'block' : 'none',
           }}
         />
 
-        {/* Standby Placeholder Screen */}
+        {/* Standby Placeholder Screen (Shown only when no stream is connected) */}
         {!isActive && (
-          <div className="flex flex-col items-center justify-center gap-3 text-slate-400 p-6 text-center">
+          <div className="absolute inset-0 bg-[#050811] flex flex-col items-center justify-center gap-3 text-slate-400 p-6 text-center z-10">
             <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center shadow-lg">
               <Video className="w-8 h-8 text-slate-500" />
             </div>
@@ -388,7 +453,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
         {/* Optional 8 Drum Zones Overlay */}
         {isActive && showZones && (
-          <div className="absolute inset-0 pointer-events-auto">
+          <div className="absolute inset-0 pointer-events-auto z-10">
             {AIR_ZONES.map((zone) => {
               const hand = getInstrumentHand(zone.id, handedness, invertHands);
               const isRight = hand === 'RIGHT';
