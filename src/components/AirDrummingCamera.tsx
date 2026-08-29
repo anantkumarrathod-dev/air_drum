@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { DrumInstrumentId, Hand, Handedness } from '../types/drum';
 import { getInstrumentHand } from '../data/beatLibrary';
-import { Camera, Square, RefreshCw, Video, AlertCircle, Layers, Maximize2, Minimize2, Play, Activity } from 'lucide-react';
+import { Camera, Square, RefreshCw, Video, AlertCircle, Layers, Maximize2, Minimize2, Play, Activity, Sparkles } from 'lucide-react';
 
 interface AirDrummingCameraProps {
   onAirStrike: (instrument: DrumInstrumentId, hand: Hand) => void;
@@ -42,6 +42,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [isMirrored, setIsMirrored] = useState<boolean>(true);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [flashes, setFlashes] = useState<Record<string, boolean>>({});
+  const [isVirtualCam, setIsVirtualCam] = useState<boolean>(false);
 
   // Live Telemetry & Diagnostics
   const [resolution, setResolution] = useState<string>('0×0');
@@ -50,10 +51,13 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
   const [statusLog, setStatusLog] = useState<string>('Ready to connect camera.');
   const [showDiag, setShowDiag] = useState<boolean>(false);
+  const [isBlackStream, setIsBlackStream] = useState<boolean>(false);
   const [videoStats, setVideoStats] = useState({ readyState: 0, paused: true, currentTime: 0 });
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastHit = useRef<Record<string, number>>({});
+  const virtualCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const virtualAnimRef = useRef<number>(0);
 
   // ── Strike Trigger ──────────────────────────────────────────────────────────
   const fireStrike = useCallback(
@@ -95,33 +99,38 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     }
   }, [refreshDevices]);
 
-  // ── Declarative Video Binding Effect ────────────────────────────────────────
+  // ── Declarative Video Binding Effect (Stable, never resets on resolution change) ──
   useEffect(() => {
     const videoEl = videoRef.current;
     if (!videoEl) return;
 
     if (mediaStream) {
-      videoEl.srcObject = mediaStream;
+      // ONLY assign if srcObject is different (prevents reload loop)
+      if (videoEl.srcObject !== mediaStream) {
+        videoEl.srcObject = mediaStream;
+      }
       videoEl.muted = true;
       videoEl.playsInline = true;
 
-      const updateDimensions = () => {
+      const handleMeta = () => {
         if (videoEl.videoWidth > 0) {
           setResolution(`${videoEl.videoWidth}×${videoEl.videoHeight}`);
           setStatusLog(`Streaming: ${videoEl.videoWidth}×${videoEl.videoHeight}`);
         }
-      };
-
-      videoEl.onloadedmetadata = () => {
-        updateDimensions();
         videoEl.play().catch((e) => console.log('play on loadedmetadata:', e));
       };
 
-      videoEl.onloadeddata = updateDimensions;
-      videoEl.oncanplay = updateDimensions;
+      videoEl.onloadedmetadata = handleMeta;
+      videoEl.onloadeddata = handleMeta;
+      videoEl.oncanplay = handleMeta;
       videoEl.play().catch(() => {});
 
-      // Watchdog interval to ensure stats are updated
+      // Black Frame Detection & Stats Watchdog
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = 32;
+      sampleCanvas.height = 18;
+      const sampleCtx = sampleCanvas.getContext('2d');
+
       const interval = setInterval(() => {
         if (videoEl) {
           setVideoStats({
@@ -129,23 +138,40 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             paused: videoEl.paused,
             currentTime: Math.round(videoEl.currentTime * 10) / 10,
           });
-          if (videoEl.videoWidth > 0 && resolution === '0×0') {
+
+          if (videoEl.videoWidth > 0) {
             setResolution(`${videoEl.videoWidth}×${videoEl.videoHeight}`);
+
+            // Check if stream is pure black (shutter closed)
+            if (sampleCtx && videoEl.readyState >= 2) {
+              try {
+                sampleCtx.drawImage(videoEl, 0, 0, 32, 18);
+                const p = sampleCtx.getImageData(0, 0, 32, 18).data;
+                let lum = 0;
+                for (let i = 0; i < p.length; i += 4) {
+                  lum += (p[i] + p[i + 1] + p[i + 2]) / 3;
+                }
+                const avgLum = lum / (32 * 18);
+                setIsBlackStream(avgLum < 4);
+              } catch {}
+            }
           }
         }
-      }, 500);
+      }, 800);
 
       return () => clearInterval(interval);
     } else {
       videoEl.srcObject = null;
       setResolution('0×0');
+      setIsBlackStream(false);
     }
-  }, [mediaStream, resolution]);
+  }, [mediaStream]);
 
   // ── Meeting App Camera Starter ──────────────────────────────────────────────
   const startCamera = async (targetDeviceId?: string) => {
     setCameraError(null);
     setIsStarting(true);
+    setIsVirtualCam(false);
     setStatusLog('Requesting camera permission...');
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -190,9 +216,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       const errorObj = err as Error;
       console.error('getUserMedia error:', errorObj);
       const msg = errorObj?.name === 'NotAllowedError'
-        ? 'Camera permission denied. Please allow camera access in your browser address bar.'
+        ? 'Camera permission denied. Please click the lock icon in your address bar and set Camera to Allow.'
         : errorObj?.name === 'NotReadableError'
-        ? 'Camera is in use by another app (e.g. Zoom, Teams). Please close other video apps.'
+        ? 'Camera is locked by another app (Zoom, Teams, etc.). Please close other video apps.'
         : `Camera error: ${errorObj?.message || 'Failed to start'}`;
 
       setCameraError(msg);
@@ -201,8 +227,72 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     }
   };
 
+  // ── Virtual Test Camera (Animated Canvas Stream) ───────────────────────────
+  const startVirtualCamera = () => {
+    setCameraError(null);
+    setIsStarting(true);
+    setIsVirtualCam(true);
+
+    if (mediaStream) {
+      mediaStream.getTracks().forEach((t) => t.stop());
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    virtualCanvasRef.current = canvas;
+    const ctx = canvas.getContext('2d');
+
+    let t = 0;
+    const renderAnim = () => {
+      t += 0.03;
+      if (ctx) {
+        // Gradient backdrop
+        const grad = ctx.createLinearGradient(0, 0, 640, 360);
+        grad.addColorStop(0, '#0f172a');
+        grad.addColorStop(1, '#1e1b4b');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 640, 360);
+
+        // Animated color circles
+        ctx.beginPath();
+        ctx.arc(320 + Math.sin(t) * 150, 180 + Math.cos(t * 1.5) * 80, 45, 0, Math.PI * 2);
+        ctx.fillStyle = '#00E5FF';
+        ctx.shadowColor = '#00E5FF';
+        ctx.shadowBlur = 20;
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(320 - Math.sin(t * 1.2) * 140, 180 - Math.cos(t) * 70, 35, 0, Math.PI * 2);
+        ctx.fillStyle = '#FF6D00';
+        ctx.shadowColor = '#FF6D00';
+        ctx.shadowBlur = 20;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Overlay Text
+        ctx.font = 'bold 20px monospace';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.fillText('🌈 VIRTUAL CAMERA TEST PATTERN', 320, 50);
+        ctx.font = '14px monospace';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('Wave hands over drum zones to test sound triggers', 320, 80);
+      }
+      virtualAnimRef.current = requestAnimationFrame(renderAnim);
+    };
+    renderAnim();
+
+    const stream = canvas.captureStream(30);
+    setMediaStream(stream);
+    setDeviceLabel('Virtual Test Camera');
+    setStatusLog('Virtual camera pattern streaming.');
+    setIsStarting(false);
+  };
+
   // ── Stop Camera ─────────────────────────────────────────────────────────────
   const stopCamera = () => {
+    cancelAnimationFrame(virtualAnimRef.current);
     if (mediaStream) {
       mediaStream.getTracks().forEach((t) => t.stop());
       setMediaStream(null);
@@ -210,6 +300,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    setIsVirtualCam(false);
     setIsStarting(false);
     setResolution('0×0');
     setStatusLog('Camera stopped.');
@@ -217,7 +308,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
   const handleDeviceChange = (newDeviceId: string) => {
     setSelectedDeviceId(newDeviceId);
-    if (mediaStream) {
+    if (mediaStream && !isVirtualCam) {
       startCamera(newDeviceId);
     }
   };
@@ -231,6 +322,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      cancelAnimationFrame(virtualAnimRef.current);
       if (mediaStream) {
         mediaStream.getTracks().forEach((t) => t.stop());
       }
@@ -256,7 +348,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     >
       {/* ── TOP CONTROL BAR ── */}
       <div className="shrink-0 flex items-center justify-between flex-wrap gap-2 bg-[#0c1222] border border-slate-800 rounded-xl px-3 py-2">
-        {/* Left: Meeting Style Status Indicator */}
+        {/* Left: Status Indicator */}
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center">
             <Camera className={`w-4 h-4 ${isActive ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
@@ -284,7 +376,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         </div>
 
         {/* Center: Camera Device Selector */}
-        {availableDevices.length > 1 && (
+        {availableDevices.length > 1 && !isVirtualCam && (
           <div className="flex items-center gap-1.5 bg-black/60 border border-slate-700 px-2 py-1 rounded-xl text-xs">
             <Video className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             <select
@@ -304,7 +396,19 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
         {/* Right: Master Control Buttons */}
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Force Play button if stream exists but paused */}
+          {/* Virtual Cam Pattern Test */}
+          {!isActive && (
+            <button
+              onClick={startVirtualCamera}
+              className="px-2.5 py-1.5 rounded-xl bg-purple-950/80 hover:bg-purple-900 border border-purple-500/50 text-purple-300 text-[11px] font-bold flex items-center gap-1 transition-all"
+              title="Test with Virtual Camera Pattern"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+              <span>TEST PATTERN</span>
+            </button>
+          )}
+
+          {/* Force Play button if paused */}
           {isActive && videoStats.paused && (
             <button
               onClick={forcePlayVideo}
@@ -388,6 +492,24 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         </div>
       </div>
 
+      {/* ── BLACK STREAM HARDWARE WARNING ── */}
+      {isBlackStream && isActive && !isVirtualCam && (
+        <div className="shrink-0 p-3 rounded-xl bg-amber-950/90 border border-amber-500 text-amber-200 text-xs flex items-center justify-between gap-2 shadow-lg animate-pulse">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <b>Webcam is sending pure black frames.</b> Check if your webcam has a physical sliding privacy shutter, privacy switch on the side/keyboard, or is being used by another program.
+            </span>
+          </div>
+          <button
+            onClick={startVirtualCamera}
+            className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs shrink-0"
+          >
+            Switch to Test Pattern
+          </button>
+        </div>
+      )}
+
       {/* ── ERROR NOTICE BANNER ── */}
       {cameraError && (
         <div className="shrink-0 p-3 rounded-xl bg-red-950/90 border border-red-500 text-red-200 text-xs flex items-center justify-between gap-2 shadow-lg">
@@ -395,12 +517,20 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
             <span>{cameraError}</span>
           </div>
-          <button
-            onClick={() => startCamera()}
-            className="px-3 py-1 rounded-lg bg-red-800 hover:bg-red-700 text-white font-bold text-xs"
-          >
-            🔄 Retry
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={startVirtualCamera}
+              className="px-3 py-1 rounded-lg bg-purple-900 hover:bg-purple-800 text-purple-200 font-bold text-xs"
+            >
+              Try Test Pattern
+            </button>
+            <button
+              onClick={() => startCamera()}
+              className="px-3 py-1 rounded-lg bg-red-800 hover:bg-red-700 text-white font-bold text-xs"
+            >
+              🔄 Retry
+            </button>
+          </div>
         </div>
       )}
 
@@ -416,9 +546,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
       {/* ── MEETING APP VIDEO VIEWPORT ── */}
       <div className="relative w-full flex-1 min-h-[320px] rounded-2xl border-2 border-slate-800 bg-[#050811] overflow-hidden flex items-center justify-center">
-        {/* Simple Direct HTML5 Video Player (Always rendered in DOM, never display:none) */}
+        {/* Simple Direct HTML5 Video Player */}
         <video
-          ref={videoRef}
+          ref={(el) => {
+            videoRef.current = el;
+            if (el && mediaStream && el.srcObject !== mediaStream) {
+              el.srcObject = mediaStream;
+              el.play().catch(() => {});
+            }
+          }}
           autoPlay
           playsInline
           muted
@@ -431,7 +567,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           }}
         />
 
-        {/* Standby Placeholder Screen (Shown only when no stream is connected) */}
+        {/* Standby Placeholder Screen */}
         {!isActive && (
           <div className="absolute inset-0 bg-[#050811] flex flex-col items-center justify-center gap-3 text-slate-400 p-6 text-center z-10">
             <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center shadow-lg">
@@ -439,15 +575,23 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </div>
             <div>
               <p className="font-bold text-white text-sm">Camera is currently inactive</p>
-              <p className="text-xs text-slate-500 mt-1">Click the green "START CAMERA" button above to begin video stream</p>
+              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" or "TEST PATTERN" above</p>
             </div>
-            <button
-              onClick={() => startCamera()}
-              disabled={isStarting}
-              className="mt-2 px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs shadow-lg transition-transform hover:scale-105"
-            >
-              {isStarting ? 'CONNECTING...' : '📷 START CAMERA'}
-            </button>
+            <div className="flex items-center gap-2 mt-2">
+              <button
+                onClick={() => startCamera()}
+                disabled={isStarting}
+                className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs shadow-lg transition-transform hover:scale-105"
+              >
+                {isStarting ? 'CONNECTING...' : '📷 START CAMERA'}
+              </button>
+              <button
+                onClick={startVirtualCamera}
+                className="px-4 py-2 rounded-xl bg-purple-900 hover:bg-purple-800 text-purple-200 font-bold text-xs shadow-lg transition-transform hover:scale-105"
+              >
+                ✨ TEST PATTERN
+              </button>
+            </div>
           </div>
         )}
 
