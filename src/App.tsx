@@ -188,19 +188,15 @@ export const App: React.FC = () => {
 
   // Evaluate Strike Callback
   const evaluateUserStrike = useCallback(
-    (hand: Hand) => {
+    (hand: Hand, specificInstrument?: DrumInstrumentId) => {
       audioEngine.init();
 
       const floorBassHand = handedness === 'RIGHT_HANDED' ? (!invertHands ? 'RIGHT' : 'LEFT') : (!invertHands ? 'LEFT' : 'RIGHT');
       const isFloorBassStrike = hand === floorBassHand;
 
-      if (isFloorBassStrike) {
-        audioEngine.playInstrument('bass', 1.0);
-        setActiveHits((prev) => [...prev.slice(-10), { instrument: 'bass', hand, timestamp: Date.now() }]);
-      } else {
-        audioEngine.playInstrument('snare', 1.0);
-        setActiveHits((prev) => [...prev.slice(-10), { instrument: 'snare', hand, timestamp: Date.now() }]);
-      }
+      const instToPlay: DrumInstrumentId = specificInstrument || (isFloorBassStrike ? 'bass' : 'snare');
+      audioEngine.playInstrument(instToPlay, 1.0);
+      setActiveHits((prev) => [...prev.slice(-10), { instrument: instToPlay, hand, timestamp: Date.now() }]);
 
       if (!isPlaying) return;
 
@@ -827,9 +823,7 @@ export const App: React.FC = () => {
           <div className="w-full h-full flex-1 flex flex-col min-h-0 max-w-7xl mx-auto overflow-hidden">
             <AirDrummingCamera
               onAirStrike={(instrument, hand) => {
-                audioEngine.playInstrument(instrument, 1.0);
-                setActiveHits((prev) => [...prev.slice(-10), { instrument, hand, timestamp: Date.now() }]);
-                evaluateUserStrike(hand);
+                evaluateUserStrike(hand, instrument);
               }}
               handedness={handedness}
               invertHands={invertHands}
