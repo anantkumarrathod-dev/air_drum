@@ -67,7 +67,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   // Camera Dimension & Layout Fit
   const [fitMode, setFitMode] = useState<FitMode>('cover');
 
-  // Noise-Immune Motion Engine Settings (Default: 65% for balanced gesture trigger)
+  // Motion Detection Settings (Default: 65% for balanced gesture trigger)
   const [motionSensitivity, setMotionSensitivity] = useState<number>(65); // 1-100
   const [zoneMotionLevels, setZoneMotionLevels] = useState<Record<string, number>>({});
   const [hitCounts, setHitCounts] = useState<Record<string, number>>({});
@@ -87,6 +87,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastHit = useRef<Record<string, number>>({});
   const streamStartTimeRef = useRef<number>(0);
+  const prevZoneMotionLevels = useRef<Record<string, number>>({});
   const virtualCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const virtualAnimRef = useRef<number>(0);
   const motionAnimRef = useRef<number>(0);
@@ -99,7 +100,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const fireStrike = useCallback(
     (id: DrumInstrumentId) => {
       const now = performance.now();
-      // Snappy 180ms debounce so 1 gesture = 1 crisp hit
+      // Clean 180ms per-pad debounce: 1 gesture = 1 crisp beat
       if (now - (lastHit.current[id] || 0) < 180) return;
       lastHit.current[id] = now;
 
@@ -116,18 +117,19 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     [onAirStrike, handedness, invertHands]
   );
 
-  // ── Noise-Immune Optical Flow Motion Engine ────────────────────────────────
+  // ── True Gesture Impulse & Velocity Engine ───────────────────────────────────
   useEffect(() => {
     if (!mediaStream) {
       cancelAnimationFrame(motionAnimRef.current);
       setZoneMotionLevels({});
+      prevZoneMotionLevels.current = {};
       prevFrameRef.current = null;
       return;
     }
 
     streamStartTimeRef.current = performance.now();
     setIsCalibrating(true);
-    const calTimer = setTimeout(() => setIsCalibrating(false), 800);
+    const calTimer = setTimeout(() => setIsCalibrating(false), 900);
 
     const W = 160;
     const H = 90;
@@ -140,7 +142,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     const processMotion = () => {
       const videoEl = videoRef.current;
       const now = performance.now();
-      const isWarmup = now - streamStartTimeRef.current < 800;
+      const isWarmup = now - streamStartTimeRef.current < 900;
 
       if (videoEl && videoEl.readyState >= 2 && ctx) {
         try {
@@ -153,9 +155,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             const currentLevels: Record<string, number> = {};
             const triggeredZones: DrumInstrumentId[] = [];
 
-            // Sensitivity threshold calculation:
-            // SENS 20% -> threshold 32, SENS 65% -> threshold 18, SENS 95% -> threshold 8
-            const activeThreshold = Math.max(7, 38 - sensRef.current * 0.32);
+            // Strike threshold mapped to sensitivity slider
+            // Sens 30% -> threshold 32, Sens 65% -> threshold 18, Sens 95% -> threshold 8
+            const strikeThreshold = Math.max(8, 42 - sensRef.current * 0.36);
 
             AIR_ZONES.forEach((zone) => {
               const zX = Math.floor((zone.leftPct / 100) * W);
@@ -164,8 +166,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               const zH = Math.floor((zone.heightPct / 100) * H);
 
               let activePixelCount = 0;
-              let activeDiffSum = 0;
-              let totalSampleCount = 0;
+              let sampleCount = 0;
 
               for (let y = zY; y < zY + zH; y += 2) {
                 for (let x = zX; x < zX + zW; x += 2) {
@@ -175,39 +176,46 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                   const bDiff = Math.abs(data[idx + 2] - prev[idx + 2]);
                   const pixelDiff = (rDiff + gDiff + bDiff) / 3;
 
-                  // High-pass Noise Gate: Reject camera thermal sensor noise (< 26)
-                  // Real moving hands and sticks produce pixel deltas of 35-150
-                  if (pixelDiff > 26) {
+                  // High-pass Noise Filter:
+                  // Ignore camera sensor thermal flicker (< 32). Only real physical objects produce >= 32.
+                  if (pixelDiff >= 32) {
                     activePixelCount++;
-                    activeDiffSum += pixelDiff;
                   }
-                  totalSampleCount++;
+                  sampleCount++;
                 }
               }
 
-              const activeRatio = totalSampleCount > 0 ? (activePixelCount / totalSampleCount) : 0;
-              const avgActiveDiff = activePixelCount > 0 ? (activeDiffSum / activePixelCount) : 0;
-
-              // Motion Level (0-100): Reflects real physical object motion
-              const motionScore = Math.min(100, Math.round(activeRatio * 350 + (avgActiveDiff * 0.3)));
+              // Percentage of the zone actively moving (0 to 100)
+              const activePct = sampleCount > 0 ? (activePixelCount / sampleCount) * 100 : 0;
+              const motionScore = Math.min(100, Math.round(activePct * 3.2));
               currentLevels[zone.id] = motionScore;
 
-              // Trigger condition:
-              // 1. Motion score exceeds threshold
-              // 2. Minimum clustered pixel count (at least 6-8 sample points changing together, prevents 1-pixel noise)
-              const minPixelsRequired = Math.max(4, Math.round(totalSampleCount * 0.025));
-              if (motionScore >= activeThreshold && activePixelCount >= minPixelsRequired) {
+              const prevLevel = prevZoneMotionLevels.current[zone.id] || 0;
+              const deltaImpulse = motionScore - prevLevel; // Acceleration spike
+
+              // Minimum physical cluster: requires at least 8% of the zone area changing to count as a finger/stick
+              const minActivePixels = Math.max(12, Math.round(sampleCount * 0.08));
+
+              // STRIKE TRIGGER RULES:
+              // 1. A sudden downward flick / impulse (motion accelerates upward sharply: deltaImpulse >= strikeThreshold)
+              // 2. OR sustained large fast motion (motionScore >= strikeThreshold * 1.8)
+              // 3. AND physical cluster size check (activePixelCount >= minActivePixels)
+              const isImpulseStrike = deltaImpulse >= (strikeThreshold * 0.75) && activePixelCount >= minActivePixels;
+              const isHeavyStrike = motionScore >= (strikeThreshold * 1.8) && activePixelCount >= (minActivePixels * 1.5);
+
+              if (isImpulseStrike || isHeavyStrike) {
                 triggeredZones.push(zone.id);
               }
             });
 
-            // Global shake / lighting shift rejection:
-            // If more than 3 pads trigger at the exact same instant, ignore as ambient light shift
+            // Global Camera Shake / Whole-Room Lighting Rejection:
+            // If > 3 zones trigger simultaneously, it's ambient light / camera bump, not a drum strike!
             if (triggeredZones.length > 0 && triggeredZones.length <= 3) {
               triggeredZones.forEach((id) => fireStrike(id));
             }
 
             setZoneMotionLevels(currentLevels);
+            prevZoneMotionLevels.current = currentLevels;
           }
 
           prevFrameRef.current = new Uint8ClampedArray(data);
