@@ -14,7 +14,8 @@ import {
   Activity, 
   Sparkles, 
   Tv, 
-  Gauge 
+  Gauge, 
+  Flame 
 } from 'lucide-react';
 
 interface AirDrummingCameraProps {
@@ -23,25 +24,26 @@ interface AirDrummingCameraProps {
   invertHands?: boolean;
 }
 
-interface AirZoneConfig {
+interface AirZoneGridCell {
   id: DrumInstrumentId;
   label: string;
   sub: string;
-  leftPct: number;
-  topPct: number;
-  widthPct: number;
-  heightPct: number;
+  row: number; // 0 or 1
+  col: number; // 0, 1, 2, 3
 }
 
-const AIR_ZONES: AirZoneConfig[] = [
-  { id: 'crash',        label: 'CRASH',     sub: '16" Cymbal',   leftPct: 4,  topPct: 4,  widthPct: 20, heightPct: 28 },
-  { id: 'high_tom',     label: 'HIGH TOM',  sub: '10" Tom',      leftPct: 28, topPct: 4,  widthPct: 20, heightPct: 28 },
-  { id: 'mid_tom',      label: 'MID TOM',   sub: '12" Tom',      leftPct: 52, topPct: 4,  widthPct: 20, heightPct: 28 },
-  { id: 'ride',         label: 'RIDE',      sub: '20" Cymbal',   leftPct: 76, topPct: 4,  widthPct: 20, heightPct: 28 },
-  { id: 'hihat_closed', label: 'HI-HAT',    sub: '14" Cymbals',  leftPct: 4,  topPct: 36, widthPct: 20, heightPct: 30 },
-  { id: 'snare',        label: 'SNARE',     sub: '14" Snare',    leftPct: 28, topPct: 36, widthPct: 20, heightPct: 30 },
-  { id: 'floor_tom',    label: 'FLOOR TOM', sub: '16" Floor',    leftPct: 76, topPct: 36, widthPct: 20, heightPct: 30 },
-  { id: 'bass',         label: 'BASS DRUM', sub: '22" Kick',     leftPct: 34, topPct: 68, widthPct: 32, heightPct: 28 },
+// 8 Giant Contiguous Zones occupying 100% of viewport
+const GRID_ZONES: AirZoneGridCell[] = [
+  // Top Row (0% to 50% height)
+  { id: 'crash',        label: 'CRASH',     sub: '16" CYMBAL', row: 0, col: 0 },
+  { id: 'high_tom',     label: 'HIGH TOM',  sub: '10" TOM',    row: 0, col: 1 },
+  { id: 'mid_tom',      label: 'MID TOM',   sub: '12" TOM',    row: 0, col: 2 },
+  { id: 'ride',         label: 'RIDE',      sub: '20" CYMBAL', row: 0, col: 3 },
+  // Bottom Row (50% to 100% height)
+  { id: 'hihat_closed', label: 'HI-HAT',    sub: '14" CYMBALS', row: 1, col: 0 },
+  { id: 'snare',        label: 'SNARE',     sub: '14" SNARE',   row: 1, col: 1 },
+  { id: 'bass',         label: 'BASS DRUM', sub: '22" KICK',    row: 1, col: 2 },
+  { id: 'floor_tom',    label: 'FLOOR TOM', sub: '16" FLOOR',   row: 1, col: 3 },
 ];
 
 type FitMode = 'cover' | 'contain' | 'fill' | '16:9' | '4:3';
@@ -63,10 +65,11 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   // Camera Dimension & Layout Fit
   const [fitMode, setFitMode] = useState<FitMode>('cover');
 
-  // Motion Detection Settings & State
-  const [motionSensitivity, setMotionSensitivity] = useState<number>(65); // 1-100
+  // Ultra-Sensitive Motion Engine State
+  const [motionSensitivity, setMotionSensitivity] = useState<number>(75); // 1-100 (Default 75% for finger sensitivity)
   const [zoneMotionLevels, setZoneMotionLevels] = useState<Record<string, number>>({});
   const [hitCounts, setHitCounts] = useState<Record<string, number>>({});
+  const [totalHits, setTotalHits] = useState<number>(0);
 
   // Live Telemetry & Diagnostics
   const [resolution, setResolution] = useState<string>('0×0');
@@ -92,14 +95,16 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const fireStrike = useCallback(
     (id: DrumInstrumentId) => {
       const now = performance.now();
-      if (now - (lastHit.current[id] || 0) < 180) return;
+      // Fast 130ms cooldown for snappy finger-flinch responsiveness
+      if (now - (lastHit.current[id] || 0) < 130) return;
       lastHit.current[id] = now;
 
       setHitCounts((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
+      setTotalHits((prev) => prev + 1);
       setFlashes((prev) => ({ ...prev, [id]: true }));
       setTimeout(() => {
         setFlashes((prev) => ({ ...prev, [id]: false }));
-      }, 220);
+      }, 200);
 
       const hand = getInstrumentHand(id, handedness, invertHands);
       onAirStrike(id, hand);
@@ -107,7 +112,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     [onAirStrike, handedness, invertHands]
   );
 
-  // ── Motion Detection Processing Loop ────────────────────────────────────────
+  // ── Ultra-High-Precision Micro-Cluster Motion Engine ────────────────────────
   useEffect(() => {
     if (!mediaStream) {
       cancelAnimationFrame(motionAnimRef.current);
@@ -115,14 +120,18 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       return;
     }
 
+    // High resolution processing canvas for capturing single finger movements
+    const W = 240;
+    const H = 135;
     const procCanvas = motionCanvasRef.current || document.createElement('canvas');
-    procCanvas.width = 160;
-    procCanvas.height = 90;
+    procCanvas.width = W;
+    procCanvas.height = H;
     motionCanvasRef.current = procCanvas;
     const ctx = procCanvas.getContext('2d', { willReadFrequently: true });
 
-    const W = 160;
-    const H = 90;
+    // Grid Dimensions in Canvas Pixels
+    const colW = Math.floor(W / 4); // 60px per column
+    const rowH = Math.floor(H / 2); // 67px per row
 
     const processMotion = () => {
       const videoEl = videoRef.current;
@@ -136,37 +145,61 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           if (prev && prev.length === data.length) {
             const currentLevels: Record<string, number> = {};
 
-            AIR_ZONES.forEach((zone) => {
-              // Convert percentage bounding box to downscaled canvas pixels
-              const zX = Math.floor((zone.leftPct / 100) * W);
-              const zY = Math.floor((zone.topPct / 100) * H);
-              const zW = Math.floor((zone.widthPct / 100) * W);
-              const zH = Math.floor((zone.heightPct / 100) * H);
+            GRID_ZONES.forEach((zone) => {
+              const startX = zone.col * colW;
+              const startY = zone.row * rowH;
 
-              let totalDiff = 0;
-              let sampleCount = 0;
+              // Break the zone into 6x4 micro-cells to catch isolated finger twitches
+              const numCellCols = 6;
+              const numCellRows = 4;
+              const microCellW = Math.floor(colW / numCellCols);
+              const microCellH = Math.floor(rowH / numCellRows);
 
-              for (let y = zY; y < zY + zH; y += 2) {
-                for (let x = zX; x < zX + zW; x += 2) {
-                  const idx = (y * W + x) * 4;
-                  const curLum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-                  const prevLum = 0.299 * prev[idx] + 0.587 * prev[idx + 1] + 0.114 * prev[idx + 2];
-                  const diff = Math.abs(curLum - prevLum);
+              let maxCellMotion = 0;
+              let zoneActivePixels = 0;
 
-                  if (diff > 18) {
-                    totalDiff += diff;
+              for (let cr = 0; cr < numCellRows; cr++) {
+                for (let cc = 0; cc < numCellCols; cc++) {
+                  const cellX = startX + cc * microCellW;
+                  const cellY = startY + cr * microCellH;
+                  let cellDiffSum = 0;
+                  let cellActiveCount = 0;
+                  const cellTotalPixels = microCellW * microCellH;
+
+                  for (let y = cellY; y < cellY + microCellH; y += 1) {
+                    for (let x = cellX; x < cellX + microCellW; x += 1) {
+                      const idx = (y * W + x) * 4;
+                      // Fast RGB channel delta
+                      const rDiff = Math.abs(data[idx] - prev[idx]);
+                      const gDiff = Math.abs(data[idx + 1] - prev[idx + 1]);
+                      const bDiff = Math.abs(data[idx + 2] - prev[idx + 2]);
+                      const totalPixelDiff = (rDiff + gDiff + bDiff) / 3;
+
+                      if (totalPixelDiff > 12) {
+                        cellDiffSum += totalPixelDiff;
+                        cellActiveCount++;
+                      }
+                    }
                   }
-                  sampleCount++;
+
+                  // Local micro-cell activity ratio (0 to 100)
+                  const cellActivity = (cellActiveCount / cellTotalPixels) * 100;
+                  if (cellActivity > maxCellMotion) {
+                    maxCellMotion = cellActivity;
+                  }
+                  zoneActivePixels += cellActiveCount;
                 }
               }
 
-              const avgDiff = sampleCount > 0 ? totalDiff / sampleCount : 0;
-              const motionScore = Math.min(100, Math.round(avgDiff * 4));
+              // Combined Motion Score: High peak local cell motion OR sustained cluster motion
+              const motionScore = Math.min(100, Math.round(maxCellMotion * 2.8 + (zoneActivePixels / (colW * rowH)) * 80));
               currentLevels[zone.id] = motionScore;
 
-              // Motion Trigger Threshold (sensRef 1-100 mapped to threshold)
-              const threshold = Math.max(8, 65 - sensRef.current * 0.45);
-              if (avgDiff > threshold) {
+              // Dynamic Finger-Flinch Trigger Threshold
+              // SENS 20% -> threshold ~22%, SENS 75% -> threshold ~9%, SENS 95% -> threshold ~4%
+              const triggerThreshold = Math.max(3.5, 30 - sensRef.current * 0.28);
+
+              if (maxCellMotion > triggerThreshold || motionScore > (triggerThreshold * 2.2)) {
                 fireStrike(zone.id);
               }
             });
@@ -174,10 +207,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             setZoneMotionLevels(currentLevels);
           }
 
-          // Save current frame for next comparison
           prevFrameRef.current = new Uint8ClampedArray(data);
         } catch (e) {
-          console.warn('Motion processing frame skip:', e);
+          console.warn('Motion frame skip:', e);
         }
       }
       motionAnimRef.current = requestAnimationFrame(processMotion);
@@ -311,7 +343,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       try {
         stream = await navigator.mediaDevices.getUserMedia(constraints);
       } catch {
-        // Fallback to bare-bones video constraint
         stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       }
 
@@ -364,29 +395,29 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
     let t = 0;
     const renderAnim = () => {
-      t += 0.04;
+      t += 0.045;
       if (ctx) {
         // Gradient backdrop
         const grad = ctx.createLinearGradient(0, 0, 640, 360);
-        grad.addColorStop(0, '#0a0f1d');
+        grad.addColorStop(0, '#090e1c');
         grad.addColorStop(1, '#1e1b4b');
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, 640, 360);
 
         // Animated neon drumsticks / moving sensors
-        const x1 = 320 + Math.sin(t) * 180;
-        const y1 = 180 + Math.cos(t * 1.4) * 90;
+        const x1 = 320 + Math.sin(t) * 220;
+        const y1 = 180 + Math.cos(t * 1.6) * 110;
         ctx.beginPath();
-        ctx.arc(x1, y1, 38, 0, Math.PI * 2);
+        ctx.arc(x1, y1, 35, 0, Math.PI * 2);
         ctx.fillStyle = '#00E5FF';
         ctx.shadowColor = '#00E5FF';
         ctx.shadowBlur = 25;
         ctx.fill();
 
-        const x2 = 320 - Math.sin(t * 1.3) * 160;
-        const y2 = 180 - Math.cos(t * 1.1) * 80;
+        const x2 = 320 - Math.sin(t * 1.4) * 200;
+        const y2 = 180 - Math.cos(t * 1.2) * 100;
         ctx.beginPath();
-        ctx.arc(x2, y2, 34, 0, Math.PI * 2);
+        ctx.arc(x2, y2, 32, 0, Math.PI * 2);
         ctx.fillStyle = '#FF6D00';
         ctx.shadowColor = '#FF6D00';
         ctx.shadowBlur = 25;
@@ -494,11 +525,11 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   return (
     <div
       onContextMenu={(e) => e.preventDefault()}
-      className="w-full h-full flex-1 flex flex-col min-h-0 bg-[#070b14] rounded-2xl border border-slate-800 p-2 sm:p-3 select-none gap-2 shadow-2xl overflow-hidden font-mono-code"
+      className="w-full h-full flex-1 flex flex-col min-h-0 bg-[#070b14] rounded-2xl border border-slate-800 p-2 select-none gap-2 shadow-2xl overflow-hidden font-mono-code"
     >
       {/* ── TOP CONTROL BAR ── */}
       <div className="shrink-0 flex items-center justify-between flex-wrap gap-2 bg-[#0c1222] border border-slate-800 rounded-xl px-3 py-2">
-        {/* Left: Status Indicator */}
+        {/* Left: Status & Hit Stats */}
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center">
             <Camera className={`w-4 h-4 ${isActive ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
@@ -506,7 +537,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="font-display font-black text-xs sm:text-sm text-white tracking-wide">
-                AIR DRUMMING
+                AIR DRUM GRID
               </h2>
               {isActive ? (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/50 flex items-center gap-1 shadow-sm">
@@ -518,14 +549,20 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                   STANDBY
                 </span>
               )}
+              {totalHits > 0 && (
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/40 flex items-center gap-1">
+                  <Flame className="w-3 h-3 text-cyan-400" />
+                  {totalHits} STRIKES
+                </span>
+              )}
             </div>
-            <p className="text-[10px] text-slate-400 mt-0.5 truncate max-w-[200px] sm:max-w-none">
+            <p className="text-[10px] text-slate-400 mt-0.5 truncate max-w-[180px] sm:max-w-none">
               {deviceLabel ? `📷 ${deviceLabel}` : statusLog}
             </p>
           </div>
         </div>
 
-        {/* Center: Camera Dimension & Fit Mode Dropdown */}
+        {/* Center: Camera Dimension & Fit Mode Dropdown + Sensitivity Slider */}
         <div className="flex items-center gap-2 flex-wrap">
           {/* Layout Dimension Selector */}
           <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2.5 py-1 rounded-xl text-xs">
@@ -535,30 +572,30 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               value={fitMode}
               onChange={(e) => setFitMode(e.target.value as FitMode)}
               className="bg-transparent text-cyan-300 text-[11px] font-black outline-none cursor-pointer"
-              title="Change Camera Dimensions & Fit Mode"
+              title="Change Camera Framing & Scale"
             >
-              <option value="cover" className="bg-slate-900 text-white">Fill & Cover (Recommended)</option>
-              <option value="contain" className="bg-slate-900 text-white">Fit Entire Camera (Contain)</option>
+              <option value="cover" className="bg-slate-900 text-white">Fill & Cover (Max Stage)</option>
+              <option value="contain" className="bg-slate-900 text-white">Fit Entire Sensor</option>
               <option value="fill" className="bg-slate-900 text-white">Stretch to Edges</option>
               <option value="16:9" className="bg-slate-900 text-white">16:9 Widescreen</option>
               <option value="4:3" className="bg-slate-900 text-white">4:3 Standard</option>
             </select>
           </div>
 
-          {/* Motion Sensitivity Slider */}
+          {/* Finger-Flinch Sensitivity Slider */}
           <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2.5 py-1 rounded-xl text-xs">
             <Gauge className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">SENS:</span>
+            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">FLINCH SENS:</span>
             <input
               type="range"
-              min="20"
-              max="95"
+              min="30"
+              max="98"
               value={motionSensitivity}
               onChange={(e) => setMotionSensitivity(Number(e.target.value))}
-              className="w-16 sm:w-20 accent-amber-400 cursor-pointer h-1.5"
-              title={`Motion Sensitivity: ${motionSensitivity}%`}
+              className="w-16 sm:w-24 accent-amber-400 cursor-pointer h-1.5"
+              title={`Finger Flinch Sensitivity: ${motionSensitivity}%`}
             />
-            <span className="text-[10px] font-bold text-amber-300 w-5">{motionSensitivity}%</span>
+            <span className="text-[10px] font-bold text-amber-300 w-6">{motionSensitivity}%</span>
           </div>
 
           {/* Camera Device Switcher */}
@@ -568,7 +605,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               <select
                 value={selectedDeviceId}
                 onChange={(e) => handleDeviceChange(e.target.value)}
-                className="bg-transparent text-slate-200 text-[11px] font-bold outline-none cursor-pointer max-w-[140px] truncate"
+                className="bg-transparent text-slate-200 text-[11px] font-bold outline-none cursor-pointer max-w-[130px] truncate"
                 title="Select Camera"
               >
                 {availableDevices.map((d, idx) => (
@@ -618,7 +655,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             title="Toggle Drum Zones Overlay"
           >
             <Layers className="w-3 h-3" />
-            <span>{showZones ? 'ZONES: ON' : 'ZONES: OFF'}</span>
+            <span>{showZones ? 'GRID: ON' : 'GRID: OFF'}</span>
           </button>
 
           {/* Mirror Toggle */}
@@ -685,7 +722,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
             <span>
-              <b>Webcam is sending pure black frames.</b> Check if your webcam has a physical sliding privacy shutter or switch on the keyboard/chassis.
+              <b>Webcam is sending pure black frames.</b> Check if your webcam has a physical sliding privacy shutter or switch.
             </span>
           </div>
           <button
@@ -727,12 +764,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           <div>Stream: <b className={isActive ? 'text-emerald-400' : 'text-slate-500'}>{isActive ? 'ACTIVE' : 'OFF'}</b></div>
           <div>Resolution: <b className="text-white">{resolution}</b></div>
           <div>Fit Mode: <b className="text-cyan-400">{fitMode.toUpperCase()}</b></div>
-          <div>Motion Sens: <b className="text-amber-400">{motionSensitivity}%</b></div>
+          <div>Flinch Sens: <b className="text-amber-400">{motionSensitivity}%</b></div>
         </div>
       )}
 
-      {/* ── AIR DRUMMING CAMERA VIEWPORT ── */}
-      <div className="relative w-full flex-1 min-h-[340px] rounded-2xl border-2 border-slate-800 bg-[#050811] overflow-hidden flex items-center justify-center">
+      {/* ── FULL-STAGE 2x4 AIR DRUM VIEWPORT (100% MAXIMUM SPACE) ── */}
+      <div className="relative w-full flex-1 min-h-[350px] rounded-2xl border-2 border-slate-800 bg-[#050811] overflow-hidden flex items-center justify-center">
         {/* Native HTML5 Video Element */}
         <video
           ref={(el) => {
@@ -756,7 +793,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </div>
             <div>
               <p className="font-bold text-white text-sm">Camera is currently inactive</p>
-              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" or "TEST PATTERN" above to begin air drumming</p>
+              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" to begin full-screen air drumming</p>
             </div>
             <div className="flex items-center gap-2 mt-2">
               <button
@@ -776,10 +813,10 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           </div>
         )}
 
-        {/* ── 8 GLOWING NEON DRUM ZONES & MOTION SENSORS ── */}
+        {/* ── 8 GIANT CONTIGUOUS 2x4 DRUM GRID OVERLAY (MAX SPACE) ── */}
         {isActive && showZones && (
-          <div className="absolute inset-0 pointer-events-auto z-10">
-            {AIR_ZONES.map((zone) => {
+          <div className="absolute inset-0 pointer-events-auto z-10 grid grid-cols-4 grid-rows-2 gap-1.5 p-1.5">
+            {GRID_ZONES.map((zone) => {
               const hand = getInstrumentHand(zone.id, handedness, invertHands);
               const isRight = hand === 'RIGHT';
               const color = isRight ? '#FF6D00' : '#00E5FF';
@@ -796,64 +833,68 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                     fireStrike(zone.id);
                   }}
                   style={{
-                    position: 'absolute',
-                    left: `${zone.leftPct}%`,
-                    top: `${zone.topPct}%`,
-                    width: `${zone.widthPct}%`,
-                    height: `${zone.heightPct}%`,
-                    border: isFlashing ? '3px solid #ffffff' : `2px dashed ${color}`,
+                    border: isFlashing 
+                      ? '3px solid #ffffff' 
+                      : motionLvl > 18 
+                      ? `2px solid ${color}` 
+                      : `1px solid ${color}44`,
                     backgroundColor: isFlashing 
-                      ? 'rgba(255,255,255,0.35)' 
-                      : motionLvl > 25 
-                      ? `${color}22` 
+                      ? 'rgba(255,255,255,0.4)' 
+                      : motionLvl > 15 
+                      ? `${color}28` 
                       : 'rgba(0,0,0,0.18)',
                     boxShadow: isFlashing 
-                      ? '0 0 35px #ffffff, inset 0 0 20px #ffffff' 
-                      : motionLvl > 20 
-                      ? `0 0 18px ${color}66` 
-                      : `0 0 8px ${color}22`,
+                      ? '0 0 40px #ffffff, inset 0 0 30px #ffffff' 
+                      : motionLvl > 18 
+                      ? `0 0 24px ${color}88, inset 0 0 15px ${color}33` 
+                      : `0 0 10px ${color}15`,
                   }}
-                  className="rounded-2xl cursor-pointer flex flex-col items-center justify-between p-2 select-none transition-all hover:bg-white/10 group backdrop-blur-[1px]"
+                  className="rounded-xl cursor-pointer flex flex-col items-center justify-between p-2 select-none transition-all hover:bg-white/10 group backdrop-blur-[1px]"
                 >
                   {/* Top Bar: Name & Hand Indicator */}
                   <div className="w-full flex items-center justify-between pointer-events-none">
                     <span 
-                      className="text-[11px] sm:text-xs font-black text-white tracking-wide" 
-                      style={{ textShadow: `0 0 8px ${color}` }}
+                      className="text-xs sm:text-sm font-black text-white tracking-wide" 
+                      style={{ textShadow: `0 0 10px ${color}` }}
                     >
                       {zone.label}
                     </span>
                     <span
-                      className="text-[9px] font-bold px-1.5 py-0.2 rounded border bg-black/60"
+                      className="text-[10px] font-black px-2 py-0.5 rounded border bg-black/70 shadow-sm"
                       style={{ borderColor: color, color }}
                     >
                       {isRight ? 'RH' : 'LH'}
                     </span>
                   </div>
 
-                  {/* Center: Realtime Motion Energy Bar */}
-                  <div className="w-full flex flex-col items-center gap-1 pointer-events-none">
-                    <div className="w-3/4 h-1.5 rounded-full bg-black/60 border border-slate-700 overflow-hidden">
+                  {/* Center: Realtime High-Sensitivity Motion Energy Meter */}
+                  <div className="w-full flex flex-col items-center gap-1 pointer-events-none px-2">
+                    <div className="w-full h-2 rounded-full bg-black/70 border border-slate-700/80 overflow-hidden shadow-inner">
                       <div
                         className="h-full transition-all duration-75 rounded-full"
                         style={{
-                          width: `${Math.min(100, motionLvl * 1.5)}%`,
-                          backgroundColor: motionLvl > 40 ? '#ffffff' : color,
-                          boxShadow: `0 0 6px ${color}`,
+                          width: `${Math.min(100, motionLvl * 1.8)}%`,
+                          backgroundColor: motionLvl > 30 ? '#ffffff' : color,
+                          boxShadow: `0 0 8px ${color}`,
                         }}
                       />
                     </div>
                     {hits > 0 && (
-                      <span className="text-[8px] font-bold px-1 rounded bg-black/70 text-slate-300">
+                      <span className="text-[9px] font-bold px-1.5 rounded bg-black/80 text-slate-200 border border-slate-700">
                         {hits} hits
                       </span>
                     )}
                   </div>
 
                   {/* Bottom Subtitle */}
-                  <span className="text-[9px] text-slate-300 bg-black/70 px-1.5 py-0.5 rounded border border-slate-800/80 pointer-events-none">
-                    {zone.sub}
-                  </span>
+                  <div className="w-full flex items-center justify-between pointer-events-none text-[9px] text-slate-300">
+                    <span className="bg-black/80 px-1.5 py-0.5 rounded border border-slate-800/80">
+                      {zone.sub}
+                    </span>
+                    <span className="text-[8px] font-bold text-slate-400">
+                      {motionLvl > 0 ? `${motionLvl}% flinch` : 'Ready'}
+                    </span>
+                  </div>
                 </div>
               );
             })}
@@ -867,7 +908,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           🥁 QUICK TEST PADS:
         </span>
         <div className="flex items-center gap-1.5 flex-1 justify-end">
-          {AIR_ZONES.map((zone) => {
+          {GRID_ZONES.map((zone) => {
             const hand = getInstrumentHand(zone.id, handedness, invertHands);
             const isRight = hand === 'RIGHT';
             return (
