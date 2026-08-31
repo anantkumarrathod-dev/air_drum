@@ -67,9 +67,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   // Camera Dimension & Layout Fit
   const [fitMode, setFitMode] = useState<FitMode>('cover');
 
-  // Motion Detection Settings (Default: 65% for balanced gesture trigger)
+  // Flinch Engine Settings (Default: 65% for crisp finger flinches)
   const [motionSensitivity, setMotionSensitivity] = useState<number>(65); // 1-100
-  const [zoneMotionLevels, setZoneMotionLevels] = useState<Record<string, number>>({});
+  const [zoneFlinchLevels, setZoneFlinchLevels] = useState<Record<string, number>>({});
   const [hitCounts, setHitCounts] = useState<Record<string, number>>({});
   const [totalHits, setTotalHits] = useState<number>(0);
   const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
@@ -100,8 +100,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const fireStrike = useCallback(
     (id: DrumInstrumentId) => {
       const now = performance.now();
-      // Clean 180ms per-pad debounce: 1 gesture = 1 crisp beat
-      if (now - (lastHit.current[id] || 0) < 180) return;
+      // Clean 200ms per-pad debounce: 1 sudden flinch = 1 crisp beat
+      if (now - (lastHit.current[id] || 0) < 200) return;
       lastHit.current[id] = now;
 
       setHitCounts((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
@@ -117,11 +117,11 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     [onAirStrike, handedness, invertHands]
   );
 
-  // ── True Gesture Impulse & Velocity Engine ───────────────────────────────────
+  // ── Sudden Fast Flinch Motion Engine ─────────────────────────────────────────
   useEffect(() => {
     if (!mediaStream) {
       cancelAnimationFrame(motionAnimRef.current);
-      setZoneMotionLevels({});
+      setZoneFlinchLevels({});
       prevZoneMotionLevels.current = {};
       prevFrameRef.current = null;
       return;
@@ -152,12 +152,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           const prev = prevFrameRef.current;
 
           if (prev && prev.length === data.length && !isWarmup) {
-            const currentLevels: Record<string, number> = {};
+            const currentMotionLevels: Record<string, number> = {};
+            const currentFlinchLevels: Record<string, number> = {};
             const triggeredZones: DrumInstrumentId[] = [];
 
-            // Strike threshold mapped to sensitivity slider
-            // Sens 30% -> threshold 32, Sens 65% -> threshold 18, Sens 95% -> threshold 8
-            const strikeThreshold = Math.max(8, 42 - sensRef.current * 0.36);
+            // Flinch Velocity Threshold mapped to sensitivity slider
+            // Sens 30% -> Flinch Delta >= 40 (Requires very fast, sharp snap)
+            // Sens 65% -> Flinch Delta >= 28 (Standard finger flinch / stick snap)
+            // Sens 95% -> Flinch Delta >= 16 (Subtle finger twitch)
+            const flinchThreshold = Math.max(15, 48 - sensRef.current * 0.35);
 
             AIR_ZONES.forEach((zone) => {
               const zX = Math.floor((zone.leftPct / 100) * W);
@@ -176,46 +179,44 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                   const bDiff = Math.abs(data[idx + 2] - prev[idx + 2]);
                   const pixelDiff = (rDiff + gDiff + bDiff) / 3;
 
-                  // High-pass Noise Filter:
-                  // Ignore camera sensor thermal flicker (< 32). Only real physical objects produce >= 32.
-                  if (pixelDiff >= 32) {
+                  // High-pass Noise Filter: Ignore ambient lighting flicker (< 34)
+                  if (pixelDiff >= 34) {
                     activePixelCount++;
                   }
                   sampleCount++;
                 }
               }
 
-              // Percentage of the zone actively moving (0 to 100)
+              // Instantaneous Motion Level in this frame (0 to 100)
               const activePct = sampleCount > 0 ? (activePixelCount / sampleCount) * 100 : 0;
-              const motionScore = Math.min(100, Math.round(activePct * 3.2));
-              currentLevels[zone.id] = motionScore;
+              const motionScore = Math.min(100, Math.round(activePct * 3.5));
+              currentMotionLevels[zone.id] = motionScore;
 
               const prevLevel = prevZoneMotionLevels.current[zone.id] || 0;
-              const deltaImpulse = motionScore - prevLevel; // Acceleration spike
+              // FLINCH VELOCITY = Instantaneous Sudden Jump in Motion from previous frame
+              const flinchVelocity = Math.max(0, motionScore - prevLevel);
+              currentFlinchLevels[zone.id] = flinchVelocity;
 
-              // Minimum physical cluster: requires at least 8% of the zone area changing to count as a finger/stick
-              const minActivePixels = Math.max(12, Math.round(sampleCount * 0.08));
+              // Minimum Physical Area: at least 7% of zone moving
+              const minActivePixels = Math.max(10, Math.round(sampleCount * 0.07));
 
-              // STRIKE TRIGGER RULES:
-              // 1. A sudden downward flick / impulse (motion accelerates upward sharply: deltaImpulse >= strikeThreshold)
-              // 2. OR sustained large fast motion (motionScore >= strikeThreshold * 1.8)
-              // 3. AND physical cluster size check (activePixelCount >= minActivePixels)
-              const isImpulseStrike = deltaImpulse >= (strikeThreshold * 0.75) && activePixelCount >= minActivePixels;
-              const isHeavyStrike = motionScore >= (strikeThreshold * 1.8) && activePixelCount >= (minActivePixels * 1.5);
+              // 🎯 PURE FLINCH STRIKE CONDITION:
+              // Only sudden, fast velocity spikes (flinchVelocity >= flinchThreshold) trigger a beat!
+              // Slow waving, idle hands, or gradual repositioning have low flinchVelocity (< 12) and are IGNORED.
+              const isSuddenFlinch = flinchVelocity >= flinchThreshold && motionScore >= 20 && activePixelCount >= minActivePixels;
 
-              if (isImpulseStrike || isHeavyStrike) {
+              if (isSuddenFlinch) {
                 triggeredZones.push(zone.id);
               }
             });
 
-            // Global Camera Shake / Whole-Room Lighting Rejection:
-            // If > 3 zones trigger simultaneously, it's ambient light / camera bump, not a drum strike!
+            // Whole-Room Lighting / Bump Rejection
             if (triggeredZones.length > 0 && triggeredZones.length <= 3) {
               triggeredZones.forEach((id) => fireStrike(id));
             }
 
-            setZoneMotionLevels(currentLevels);
-            prevZoneMotionLevels.current = currentLevels;
+            setZoneFlinchLevels(currentFlinchLevels);
+            prevZoneMotionLevels.current = currentMotionLevels;
           }
 
           prevFrameRef.current = new Uint8ClampedArray(data);
@@ -574,7 +575,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           </div>
         </div>
 
-        {/* Center: Camera Dimension & Fit Mode Dropdown + Sensitivity Slider */}
+        {/* Center: Camera Dimension & Fit Mode Dropdown + Flinch Sensitivity Slider */}
         <div className="flex items-center gap-2 flex-wrap">
           {/* Layout Dimension Selector */}
           <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2.5 py-1 rounded-xl text-xs">
@@ -594,10 +595,10 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </select>
           </div>
 
-          {/* Stick & Finger Sensitivity Slider */}
+          {/* Flinch Speed Sensitivity Slider */}
           <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2.5 py-1 rounded-xl text-xs">
             <Gauge className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">SENS:</span>
+            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">FLINCH SENS:</span>
             <input
               type="range"
               min="20"
@@ -605,7 +606,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               value={motionSensitivity}
               onChange={(e) => setMotionSensitivity(Number(e.target.value))}
               className="w-16 sm:w-24 accent-amber-400 cursor-pointer h-1.5"
-              title={`Stick & Finger Sensitivity: ${motionSensitivity}%`}
+              title={`Flinch Sensitivity: ${motionSensitivity}%`}
             />
             <span className="text-[10px] font-bold text-amber-300 w-6">{motionSensitivity}%</span>
           </div>
@@ -776,7 +777,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           <div>Stream: <b className={isActive ? 'text-emerald-400' : 'text-slate-500'}>{isActive ? 'ACTIVE' : 'OFF'}</b></div>
           <div>Resolution: <b className="text-white">{resolution}</b></div>
           <div>Fit Mode: <b className="text-cyan-400">{fitMode.toUpperCase()}</b></div>
-          <div>Stick/Finger Sens: <b className="text-amber-400">{motionSensitivity}%</b></div>
+          <div>Flinch Sens: <b className="text-amber-400">{motionSensitivity}%</b></div>
         </div>
       )}
 
@@ -833,7 +834,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               const isRight = hand === 'RIGHT';
               const color = isRight ? '#FF6D00' : '#00E5FF';
               const isFlashing = Boolean(flashes[zone.id]);
-              const motionLvl = zoneMotionLevels[zone.id] || 0;
+              const flinchLvl = zoneFlinchLevels[zone.id] || 0;
               const hits = hitCounts[zone.id] || 0;
 
               return (
@@ -852,18 +853,18 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                     height: `${zone.heightPct}%`,
                     border: isFlashing 
                       ? '3px solid #ffffff' 
-                      : motionLvl > 16 
+                      : flinchLvl > 20 
                       ? `2px solid ${color}` 
                       : `1.5px dashed ${color}88`,
                     backgroundColor: isFlashing 
-                      ? 'rgba(255,255,255,0.4)' 
-                      : motionLvl > 14 
-                      ? `${color}25` 
+                      ? 'rgba(255,255,255,0.45)' 
+                      : flinchLvl > 18 
+                      ? `${color}35` 
                       : 'rgba(0,0,0,0.18)',
                     boxShadow: isFlashing 
                       ? '0 0 35px #ffffff, inset 0 0 25px #ffffff' 
-                      : motionLvl > 16 
-                      ? `0 0 20px ${color}77, inset 0 0 10px ${color}33` 
+                      : flinchLvl > 20 
+                      ? `0 0 20px ${color}88, inset 0 0 10px ${color}44` 
                       : `0 0 10px ${color}20`,
                   }}
                   className="rounded-2xl cursor-pointer flex flex-col items-center justify-between p-2 select-none transition-all hover:bg-white/10 group backdrop-blur-[1px]"
@@ -885,14 +886,14 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                     </span>
                   </div>
 
-                  {/* Center: Realtime Stick & Finger Motion Energy Meter */}
+                  {/* Center: Realtime Flinch Velocity Meter */}
                   <div className="w-full flex flex-col items-center gap-1 pointer-events-none px-2">
                     <div className="w-full h-2 rounded-full bg-black/70 border border-slate-700/80 overflow-hidden shadow-inner">
                       <div
                         className="h-full transition-all duration-75 rounded-full"
                         style={{
-                          width: `${Math.min(100, motionLvl * 2.2)}%`,
-                          backgroundColor: motionLvl > 20 ? '#ffffff' : color,
+                          width: `${Math.min(100, flinchLvl * 2.5)}%`,
+                          backgroundColor: flinchLvl > 25 ? '#ffffff' : color,
                           boxShadow: `0 0 8px ${color}`,
                         }}
                       />
@@ -910,7 +911,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                       {zone.sub}
                     </span>
                     <span className="text-[8px] font-bold text-slate-400">
-                      {isCalibrating ? 'Calibrating...' : motionLvl > 0 ? `${motionLvl}%` : 'Idle'}
+                      {isCalibrating ? 'Calibrating...' : flinchLvl > 0 ? `Flinch: ${flinchLvl}` : 'Ready'}
                     </span>
                   </div>
                 </div>
