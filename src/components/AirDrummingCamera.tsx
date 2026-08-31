@@ -16,7 +16,8 @@ import {
   Tv, 
   Gauge, 
   Flame,
-  Zap
+  Zap,
+  Target
 } from 'lucide-react';
 
 interface AirDrummingCameraProps {
@@ -50,6 +51,13 @@ const AIR_ZONES: AirZoneConfig[] = [
 
 type FitMode = 'cover' | 'contain' | 'fill' | '16:9' | '4:3';
 
+interface FingerPoint {
+  x: number; // 0 to 100%
+  y: number; // 0 to 100%
+  active: boolean;
+  velocity: number;
+}
+
 export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   onAirStrike,
   handedness = 'RIGHT_HANDED',
@@ -67,12 +75,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   // Camera Dimension & Layout Fit
   const [fitMode, setFitMode] = useState<FitMode>('cover');
 
-  // Fast Response Flinch Sensitivity Settings (Default: 75% for instant response)
+  // Motion Detection Settings
   const [motionSensitivity, setMotionSensitivity] = useState<number>(75); // 1-100
-  const [zoneFlinchLevels, setZoneFlinchLevels] = useState<Record<string, number>>({});
   const [hitCounts, setHitCounts] = useState<Record<string, number>>({});
   const [totalHits, setTotalHits] = useState<number>(0);
   const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
+
+  // Dual Index Finger Tracking Points (Rendered on screen as Glowing Dots)
+  const [leftFinger, setLeftFinger] = useState<FingerPoint>({ x: 30, y: 50, active: false, velocity: 0 });
+  const [rightFinger, setRightFinger] = useState<FingerPoint>({ x: 70, y: 50, active: false, velocity: 0 });
 
   // Live Telemetry & Diagnostics
   const [resolution, setResolution] = useState<string>('0×0');
@@ -88,6 +99,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const lastHit = useRef<Record<string, number>>({});
   const streamStartTimeRef = useRef<number>(0);
   const bgFrameRef = useRef<Float32Array | null>(null);
+  const prevFingerPos = useRef<{ lx: number; ly: number; rx: number; ry: number }>({ lx: 30, ly: 50, rx: 70, ry: 50 });
   const virtualCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const virtualAnimRef = useRef<number>(0);
   const motionAnimRef = useRef<number>(0);
@@ -95,11 +107,10 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const sensRef = useRef<number>(motionSensitivity);
   sensRef.current = motionSensitivity;
 
-  // ── Ultra-Low-Latency Strike Trigger (50ms Cooldown for Instant Drum Rolls) ──
+  // ── Strike Trigger (Ultra-Fast 50ms Cooldown for Instant Drum Rolls) ────────
   const fireStrike = useCallback(
-    (id: DrumInstrumentId) => {
+    (id: DrumInstrumentId, hand: Hand) => {
       const now = performance.now();
-      // 50ms cooldown = up to 20 hits/second with zero lag
       if (now - (lastHit.current[id] || 0) < 50) return;
       lastHit.current[id] = now;
 
@@ -108,19 +119,19 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       setFlashes((prev) => ({ ...prev, [id]: true }));
       setTimeout(() => {
         setFlashes((prev) => ({ ...prev, [id]: false }));
-      }, 100);
+      }, 120);
 
-      const hand = getInstrumentHand(id, handedness, invertHands);
       onAirStrike(id, hand);
     },
-    [onAirStrike, handedness, invertHands]
+    [onAirStrike]
   );
 
-  // ── Adaptive Leaky Baseline Flinch Motion Engine ────────────────────────────
+  // ── Index Finger Tracking & Downstroke Strike Engine ────────────────────────
   useEffect(() => {
     if (!mediaStream) {
       cancelAnimationFrame(motionAnimRef.current);
-      setZoneFlinchLevels({});
+      setLeftFinger({ x: 30, y: 50, active: false, velocity: 0 });
+      setRightFinger({ x: 70, y: 50, active: false, velocity: 0 });
       bgFrameRef.current = null;
       return;
     }
@@ -158,76 +169,117 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           }
 
           if (!isWarmup) {
-            const currentFlinchLevels: Record<string, number> = {};
-            const triggeredZones: DrumInstrumentId[] = [];
+            // Find the active fingertip centers for Left and Right sides of the frame
+            let leftSumX = 0, leftSumY = 0, leftCount = 0;
+            let rightSumX = 0, rightSumY = 0, rightCount = 0;
 
-            // Dynamic Flinch Threshold from Sensitivity Slider:
-            // SENS 30% -> Threshold 28
-            // SENS 75% -> Threshold 14 (Instant finger flick detection)
-            // SENS 95% -> Threshold 7 (Whisper-light finger taps)
-            const flinchThreshold = Math.max(7, 36 - sensRef.current * 0.30);
+            const midX = Math.floor(W / 2);
 
-            AIR_ZONES.forEach((zone) => {
-              const zX = Math.floor((zone.leftPct / 100) * W);
-              const zY = Math.floor((zone.topPct / 100) * H);
-              const zW = Math.floor((zone.widthPct / 100) * W);
-              const zH = Math.floor((zone.heightPct / 100) * H);
+            for (let y = 4; y < H - 4; y += 2) {
+              for (let x = 4; x < W - 4; x += 2) {
+                const idx = (y * W + x) * 4;
+                const rDiff = Math.abs(data[idx] - bg[idx]);
+                const gDiff = Math.abs(data[idx + 1] - bg[idx + 1]);
+                const bDiff = Math.abs(data[idx + 2] - bg[idx + 2]);
+                const diff = (rDiff + gDiff + bDiff) / 3;
 
-              let activePixels = 0;
-              let sampleCount = 0;
-              let activeDiffSum = 0;
+                // Moving finger/stick threshold
+                if (diff >= 26) {
+                  // Upward bias: fingertip is the leading edge (topmost moving points receive more weight)
+                  const weight = (H - y) / H + 0.5;
 
-              for (let y = zY; y < zY + zH; y += 2) {
-                for (let x = zX; x < zX + zW; x += 2) {
-                  const idx = (y * W + x) * 4;
-                  // Compare current frame to adaptive rolling baseline
-                  const rDiff = Math.abs(data[idx] - bg[idx]);
-                  const gDiff = Math.abs(data[idx + 1] - bg[idx + 1]);
-                  const bDiff = Math.abs(data[idx + 2] - bg[idx + 2]);
-                  const pixelDiff = (rDiff + gDiff + bDiff) / 3;
-
-                  // High-pass filter: Ignore subtle ambient noise (< 24)
-                  if (pixelDiff >= 24) {
-                    activePixels++;
-                    activeDiffSum += pixelDiff;
+                  if (x < midX) {
+                    leftSumX += x * weight;
+                    leftSumY += y * weight;
+                    leftCount += weight;
+                  } else {
+                    rightSumX += x * weight;
+                    rightSumY += y * weight;
+                    rightCount += weight;
                   }
-                  sampleCount++;
                 }
               }
-
-              const activeRatio = sampleCount > 0 ? (activePixels / sampleCount) : 0;
-              const avgDiff = activePixels > 0 ? (activeDiffSum / activePixels) : 0;
-
-              // Immediate Flinch Score (0-100)
-              const flinchScore = Math.min(100, Math.round(activeRatio * 180 + (avgDiff * 0.4)));
-              currentFlinchLevels[zone.id] = flinchScore;
-
-              // Physical cluster: at least 4% of pad area moving with intent
-              const minActivePixels = Math.max(5, Math.round(sampleCount * 0.04));
-
-              // 🎯 INSTANT FLINCH STRIKE:
-              if (flinchScore >= flinchThreshold && activePixels >= minActivePixels) {
-                triggeredZones.push(zone.id);
-              }
-            });
-
-            // Lighting / Bump Rejection
-            if (triggeredZones.length > 0 && triggeredZones.length <= 3) {
-              triggeredZones.forEach((id) => fireStrike(id));
             }
 
-            setZoneFlinchLevels(currentFlinchLevels);
+            // Calculate smoothed finger positions (0 to 100% of viewport)
+            const prev = prevFingerPos.current;
+
+            let curLx = prev.lx;
+            let curLy = prev.ly;
+            let lActive = false;
+            let lVel = 0;
+
+            if (leftCount > 6) {
+              const targetLx = (leftSumX / leftCount / W) * 100;
+              const targetLy = (leftSumY / leftCount / H) * 100;
+              // Fast responsive smoothing
+              curLx = prev.lx * 0.4 + targetLx * 0.6;
+              curLy = prev.ly * 0.4 + targetLy * 0.6;
+              lVel = Math.max(0, curLy - prev.ly); // Downward velocity
+              lActive = true;
+            }
+
+            let curRx = prev.rx;
+            let curRy = prev.ry;
+            let rActive = false;
+            let rVel = 0;
+
+            if (rightCount > 6) {
+              const targetRx = (rightSumX / rightCount / W) * 100;
+              const targetRy = (rightSumY / rightCount / H) * 100;
+              curRx = prev.rx * 0.4 + targetRx * 0.6;
+              curRy = prev.ry * 0.4 + targetRy * 0.6;
+              rVel = Math.max(0, curRy - prev.ry); // Downward velocity
+              rActive = true;
+            }
+
+            prevFingerPos.current = { lx: curLx, ly: curLy, rx: curRx, ry: curRy };
+
+            setLeftFinger({
+              x: Math.round(curLx),
+              y: Math.round(curLy),
+              active: lActive,
+              velocity: Math.round(lVel * 10),
+            });
+
+            setRightFinger({
+              x: Math.round(curRx),
+              y: Math.round(curRy),
+              active: rActive,
+              velocity: Math.round(rVel * 10),
+            });
+
+            // 🎯 CHECK IF FINGER DOT STRIKES ANY DRUM PART
+            const checkFingerHit = (fx: number, fy: number, fActive: boolean, hand: Hand) => {
+              if (!fActive) return;
+
+              AIR_ZONES.forEach((zone) => {
+                const inX = fx >= zone.leftPct && fx <= (zone.leftPct + zone.widthPct);
+                const inY = fy >= zone.topPct && fy <= (zone.topPct + zone.heightPct);
+
+                if (inX && inY) {
+                  fireStrike(zone.id, hand);
+                }
+              });
+            };
+
+            // Mirroring adjustments
+            const effLeftX = isMirrored ? (100 - curLx) : curLx;
+            const effRightX = isMirrored ? (100 - curRx) : curRx;
+
+            checkFingerHit(effLeftX, curLy, lActive, 'LEFT');
+            checkFingerHit(effRightX, curRy, rActive, 'RIGHT');
           }
 
-          // Smooth Leaky Baseline Adaptation (Adapts in ~60ms so subsequent beats trigger immediately)
-          const alpha = 0.35; // 35% new frame, 65% baseline
+          // Leaky background adaptation (smooth 50ms recovery)
+          const alpha = 0.35;
           for (let i = 0; i < data.length; i += 4) {
             bg[i] = bg[i] * (1 - alpha) + data[i] * alpha;
             bg[i + 1] = bg[i + 1] * (1 - alpha) + data[i + 1] * alpha;
             bg[i + 2] = bg[i + 2] * (1 - alpha) + data[i + 2] * alpha;
           }
         } catch (e) {
-          console.warn('Motion frame skip:', e);
+          console.warn('Finger tracking frame skip:', e);
         }
       }
       motionAnimRef.current = requestAnimationFrame(processMotion);
@@ -239,7 +291,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       clearTimeout(calTimer);
       cancelAnimationFrame(motionAnimRef.current);
     };
-  }, [mediaStream, fireStrike]);
+  }, [mediaStream, isMirrored, fireStrike]);
 
   // ── Enumerate Connected Video Cameras ───────────────────────────────────────
   const refreshDevices = useCallback(async () => {
@@ -551,12 +603,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         {/* Left: Status & Hit Stats */}
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center">
-            <Camera className={`w-4 h-4 ${isActive ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
+            <Target className={`w-4 h-4 ${isActive ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h2 className="font-display font-black text-xs sm:text-sm text-white tracking-wide">
-                AIR DRUMMING
+                INDEX FINGER AIR DRUMMING
               </h2>
               {isActive ? (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/50 flex items-center gap-1 shadow-sm">
@@ -604,7 +656,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           {/* Instant Flinch Sensitivity Slider */}
           <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2.5 py-1 rounded-xl text-xs">
             <Gauge className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">FLINCH SENS:</span>
+            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">DOT SENS:</span>
             <input
               type="range"
               min="20"
@@ -612,7 +664,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               value={motionSensitivity}
               onChange={(e) => setMotionSensitivity(Number(e.target.value))}
               className="w-16 sm:w-24 accent-amber-400 cursor-pointer h-1.5"
-              title={`Flinch Sensitivity: ${motionSensitivity}%`}
+              title={`Finger Dot Sensitivity: ${motionSensitivity}%`}
             />
             <span className="text-[10px] font-bold text-amber-300 w-6">{motionSensitivity}%</span>
           </div>
@@ -782,12 +834,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         <div className="shrink-0 p-2.5 rounded-xl bg-black/90 border border-slate-700 text-[11px] text-slate-300 grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div>Stream: <b className={isActive ? 'text-emerald-400' : 'text-slate-500'}>{isActive ? 'ACTIVE' : 'OFF'}</b></div>
           <div>Resolution: <b className="text-white">{resolution}</b></div>
-          <div>Fit Mode: <b className="text-cyan-400">{fitMode.toUpperCase()}</b></div>
-          <div>Flinch Sens: <b className="text-amber-400">{motionSensitivity}%</b></div>
+          <div>Left Finger: <b className="text-cyan-400">{leftFinger.active ? `${leftFinger.x}%, ${leftFinger.y}%` : 'Searching'}</b></div>
+          <div>Right Finger: <b className="text-orange-400">{rightFinger.active ? `${rightFinger.x}%, ${rightFinger.y}%` : 'Searching'}</b></div>
         </div>
       )}
 
-      {/* ── AIR DRUM VIEWPORT (8 ERGONOMIC DRUM ZONES) ── */}
+      {/* ── AIR DRUM VIEWPORT WITH LIVE INDEX FINGER TRACKING DOTS ── */}
       <div className="relative w-full flex-1 min-h-[350px] rounded-2xl border-2 border-slate-800 bg-[#050811] overflow-hidden flex items-center justify-center">
         {/* Native HTML5 Video Element */}
         <video
@@ -812,7 +864,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </div>
             <div>
               <p className="font-bold text-white text-sm">Camera is currently inactive</p>
-              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" to begin air drumming</p>
+              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" to begin index finger air drumming</p>
             </div>
             <div className="flex items-center gap-2 mt-2">
               <button
@@ -840,16 +892,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               const isRight = hand === 'RIGHT';
               const color = isRight ? '#FF6D00' : '#00E5FF';
               const isFlashing = Boolean(flashes[zone.id]);
-              const flinchLvl = zoneFlinchLevels[zone.id] || 0;
               const hits = hitCounts[zone.id] || 0;
 
               return (
                 <div
                   key={zone.id}
-                  onClick={() => fireStrike(zone.id)}
+                  onClick={() => fireStrike(zone.id, hand)}
                   onTouchStart={(e) => {
                     e.preventDefault();
-                    fireStrike(zone.id);
+                    fireStrike(zone.id, hand);
                   }}
                   style={{
                     position: 'absolute',
@@ -859,18 +910,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                     height: `${zone.heightPct}%`,
                     border: isFlashing 
                       ? '3px solid #ffffff' 
-                      : flinchLvl > 12 
-                      ? `2px solid ${color}` 
                       : `1.5px dashed ${color}88`,
                     backgroundColor: isFlashing 
                       ? 'rgba(255,255,255,0.45)' 
-                      : flinchLvl > 10 
-                      ? `${color}35` 
                       : 'rgba(0,0,0,0.18)',
                     boxShadow: isFlashing 
                       ? '0 0 35px #ffffff, inset 0 0 25px #ffffff' 
-                      : flinchLvl > 12 
-                      ? `0 0 20px ${color}88, inset 0 0 10px ${color}44` 
                       : `0 0 10px ${color}20`,
                   }}
                   className="rounded-2xl cursor-pointer flex flex-col items-center justify-between p-2 select-none transition-all hover:bg-white/10 group backdrop-blur-[1px]"
@@ -892,22 +937,14 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                     </span>
                   </div>
 
-                  {/* Center: Realtime Flinch Level Meter */}
+                  {/* Center: Hit Counter Badge */}
                   <div className="w-full flex flex-col items-center gap-1 pointer-events-none px-2">
-                    <div className="w-full h-2 rounded-full bg-black/70 border border-slate-700/80 overflow-hidden shadow-inner">
-                      <div
-                        className="h-full transition-all duration-75 rounded-full"
-                        style={{
-                          width: `${Math.min(100, flinchLvl * 2.8)}%`,
-                          backgroundColor: flinchLvl > 14 ? '#ffffff' : color,
-                          boxShadow: `0 0 8px ${color}`,
-                        }}
-                      />
-                    </div>
-                    {hits > 0 && (
-                      <span className="text-[9px] font-bold px-1.5 rounded bg-black/80 text-slate-200 border border-slate-700">
+                    {hits > 0 ? (
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-black/80 text-cyan-300 border border-cyan-500/50 shadow-md">
                         {hits} hits
                       </span>
+                    ) : (
+                      <span className="text-[8px] text-slate-500">Tap to test</span>
                     )}
                   </div>
 
@@ -917,12 +954,60 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                       {zone.sub}
                     </span>
                     <span className="text-[8px] font-bold text-slate-400">
-                      {isCalibrating ? 'Calibrating...' : flinchLvl > 0 ? `Flinch: ${flinchLvl}` : 'Ready'}
+                      {isFlashing ? 'HIT!' : 'Target'}
                     </span>
                   </div>
                 </div>
               );
             })}
+
+            {/* 🔵 LEFT INDEX FINGER TRACKING DOT */}
+            {leftFinger.active && (
+              <div
+                style={{
+                  left: `${isMirrored ? (100 - leftFinger.x) : leftFinger.x}%`,
+                  top: `${leftFinger.y}%`,
+                  transform: 'translate(-50%, -50%)',
+                }}
+                className="absolute pointer-events-none z-30 transition-all duration-75 flex flex-col items-center"
+              >
+                {/* Glowing Laser Dot */}
+                <div className="relative flex items-center justify-center">
+                  <div className="w-6 h-6 rounded-full bg-cyan-400/40 animate-ping absolute" />
+                  <div className="w-5 h-5 rounded-full bg-cyan-400 border-2 border-white shadow-[0_0_20px_#00E5FF] flex items-center justify-center">
+                    <div className="w-2 h-2 rounded-full bg-white" />
+                  </div>
+                </div>
+                {/* Tracker Label */}
+                <span className="mt-1 text-[9px] font-black px-1.5 py-0.2 rounded bg-cyan-950/90 text-cyan-300 border border-cyan-400 shadow-md whitespace-nowrap">
+                  LH INDEX
+                </span>
+              </div>
+            )}
+
+            {/* 🟠 RIGHT INDEX FINGER TRACKING DOT */}
+            {rightFinger.active && (
+              <div
+                style={{
+                  left: `${isMirrored ? (100 - rightFinger.x) : rightFinger.x}%`,
+                  top: `${rightFinger.y}%`,
+                  transform: 'translate(-50%, -50%)',
+                }}
+                className="absolute pointer-events-none z-30 transition-all duration-75 flex flex-col items-center"
+              >
+                {/* Glowing Laser Dot */}
+                <div className="relative flex items-center justify-center">
+                  <div className="w-6 h-6 rounded-full bg-orange-400/40 animate-ping absolute" />
+                  <div className="w-5 h-5 rounded-full bg-orange-500 border-2 border-white shadow-[0_0_20px_#FF6D00] flex items-center justify-center">
+                    <div className="w-2 h-2 rounded-full bg-white" />
+                  </div>
+                </div>
+                {/* Tracker Label */}
+                <span className="mt-1 text-[9px] font-black px-1.5 py-0.2 rounded bg-orange-950/90 text-orange-300 border border-orange-400 shadow-md whitespace-nowrap">
+                  RH INDEX
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -939,7 +1024,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             return (
               <button
                 key={zone.id}
-                onClick={() => fireStrike(zone.id)}
+                onClick={() => fireStrike(zone.id, hand)}
                 className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-transform active:scale-95 ${
                   isRight
                     ? 'bg-orange-950/60 border-orange-500/50 text-orange-200 hover:bg-orange-900'
