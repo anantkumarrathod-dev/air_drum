@@ -43,8 +43,8 @@ import {
 type ActiveTab = 'stage' | 'camera' | 'sequencer' | 'scatter' | 'settings';
 
 export const App: React.FC = () => {
-  // Navigation State
-  const [activeTab, setActiveTab] = useState<ActiveTab>('stage');
+  // Navigation State (Air Drumming is 1st and Default)
+  const [activeTab, setActiveTab] = useState<ActiveTab>('camera');
 
   // State
   const [currentPattern, setCurrentPattern] = useState<BeatPattern>(PRESET_BEATS[0]);
@@ -717,18 +717,6 @@ export const App: React.FC = () => {
       <nav className="shrink-0 h-9 bg-[#090e1c] border-b border-slate-800/80 px-2 flex items-center justify-between gap-1 overflow-hidden">
         <div className="flex items-center gap-1 w-full h-full py-0.5">
           <button
-            onClick={() => setActiveTab('stage')}
-            className={`flex-1 h-full flex items-center justify-center gap-1 px-2 rounded-lg font-display font-black text-[11px] sm:text-xs transition-all ${
-              activeTab === 'stage'
-                ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-black shadow-[0_0_10px_rgba(0,229,255,0.4)]'
-                : 'bg-slate-900 text-slate-400 hover:text-white'
-            }`}
-          >
-            <Drum className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">1. DRUM STAGE</span>
-          </button>
-
-          <button
             onClick={() => setActiveTab('camera')}
             className={`flex-1 h-full flex items-center justify-center gap-1 px-2 rounded-lg font-display font-black text-[11px] sm:text-xs transition-all ${
               activeTab === 'camera'
@@ -737,7 +725,19 @@ export const App: React.FC = () => {
             }`}
           >
             <Camera className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">2. AIR DRUMMING</span>
+            <span className="truncate">1. AIR DRUMMING</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('stage')}
+            className={`flex-1 h-full flex items-center justify-center gap-1 px-2 rounded-lg font-display font-black text-[11px] sm:text-xs transition-all ${
+              activeTab === 'stage'
+                ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-black shadow-[0_0_10px_rgba(0,229,255,0.4)]'
+                : 'bg-slate-900 text-slate-400 hover:text-white'
+            }`}
+          >
+            <Drum className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">2. DRUM STAGE</span>
           </button>
 
           <button
