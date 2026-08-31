@@ -28,8 +28,8 @@ interface AirZoneGridCell {
   id: DrumInstrumentId;
   label: string;
   sub: string;
-  row: number; // 0 or 1
-  col: number; // 0, 1, 2, 3
+  row: number;
+  col: number;
 }
 
 // 8 Giant Contiguous Zones occupying 100% of viewport
@@ -65,12 +65,11 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   // Camera Dimension & Layout Fit
   const [fitMode, setFitMode] = useState<FitMode>('cover');
 
-  // Motion Detection Settings
+  // Motion Detection Settings & State
   const [motionSensitivity, setMotionSensitivity] = useState<number>(75); // 1-100
   const [zoneMotionLevels, setZoneMotionLevels] = useState<Record<string, number>>({});
   const [hitCounts, setHitCounts] = useState<Record<string, number>>({});
   const [totalHits, setTotalHits] = useState<number>(0);
-  const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
 
   // Live Telemetry & Diagnostics
   const [resolution, setResolution] = useState<string>('0×0');
@@ -85,7 +84,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastHit = useRef<Record<string, number>>({});
   const streamStartTimeRef = useRef<number>(0);
-  const prevZoneMotionLevels = useRef<Record<string, number>>({});
   const virtualCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const virtualAnimRef = useRef<number>(0);
   const motionAnimRef = useRef<number>(0);
@@ -98,8 +96,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const fireStrike = useCallback(
     (id: DrumInstrumentId) => {
       const now = performance.now();
-      // Fast cooldown per pad (150ms)
-      if (now - (lastHit.current[id] || 0) < 150) return;
+      if (now - (lastHit.current[id] || 0) < 160) return;
       lastHit.current[id] = now;
 
       setHitCounts((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
@@ -115,35 +112,32 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     [onAirStrike, handedness, invertHands]
   );
 
-  // ── Ultra-High-Precision Motion Engine with Edge Detection & Lighting Immunity ──
+  // ── High-Performance Motion Detection Loop ──────────────────────────────────
   useEffect(() => {
     if (!mediaStream) {
       cancelAnimationFrame(motionAnimRef.current);
       setZoneMotionLevels({});
-      prevZoneMotionLevels.current = {};
       prevFrameRef.current = null;
       return;
     }
 
     streamStartTimeRef.current = performance.now();
-    setIsCalibrating(true);
-    const calTimer = setTimeout(() => setIsCalibrating(false), 900);
 
-    const W = 240;
-    const H = 135;
+    const W = 160;
+    const H = 90;
     const procCanvas = motionCanvasRef.current || document.createElement('canvas');
     procCanvas.width = W;
     procCanvas.height = H;
     motionCanvasRef.current = procCanvas;
     const ctx = procCanvas.getContext('2d', { willReadFrequently: true });
 
-    const colW = Math.floor(W / 4); // 60px
-    const rowH = Math.floor(H / 2); // 67px
+    const colW = Math.floor(W / 4); // 40px
+    const rowH = Math.floor(H / 2); // 45px
 
     const processMotion = () => {
       const videoEl = videoRef.current;
       const now = performance.now();
-      const isWarmingUp = now - streamStartTimeRef.current < 900;
+      const isWarmup = now - streamStartTimeRef.current < 600; // 600ms grace period on start
 
       if (videoEl && videoEl.readyState >= 2 && ctx) {
         try {
@@ -152,79 +146,42 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           const data = imgData.data;
           const prev = prevFrameRef.current;
 
-          if (prev && prev.length === data.length && !isWarmingUp) {
+          if (prev && prev.length === data.length) {
             const currentLevels: Record<string, number> = {};
-            const zonesTriggering: DrumInstrumentId[] = [];
-
-            // Dynamic Finger-Flinch Trigger Threshold based on sensitivity slider
-            // SENS 30% -> threshold 18, SENS 75% -> threshold 8.5, SENS 98% -> threshold 3.8
-            const triggerThreshold = Math.max(3.8, 26 - sensRef.current * 0.23);
 
             GRID_ZONES.forEach((zone) => {
-              const startX = zone.col * colW;
-              const startY = zone.row * rowH;
+              const zX = zone.col * colW;
+              const zY = zone.row * rowH;
 
-              const numCellCols = 6;
-              const numCellRows = 4;
-              const microCellW = Math.floor(colW / numCellCols);
-              const microCellH = Math.floor(rowH / numCellRows);
+              let totalDiff = 0;
+              let sampleCount = 0;
 
-              let maxCellMotion = 0;
-              let zoneActivePixels = 0;
+              for (let y = zY; y < zY + rowH; y += 2) {
+                for (let x = zX; x < zX + colW; x += 2) {
+                  const idx = (y * W + x) * 4;
+                  const curLum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                  const prevLum = 0.299 * prev[idx] + 0.587 * prev[idx + 1] + 0.114 * prev[idx + 2];
+                  const diff = Math.abs(curLum - prevLum);
 
-              for (let cr = 0; cr < numCellRows; cr++) {
-                for (let cc = 0; cc < numCellCols; cc++) {
-                  const cellX = startX + cc * microCellW;
-                  const cellY = startY + cr * microCellH;
-                  let cellActiveCount = 0;
-                  const cellTotalPixels = microCellW * microCellH;
-
-                  for (let y = cellY; y < cellY + microCellH; y += 1) {
-                    for (let x = cellX; x < cellX + microCellW; x += 1) {
-                      const idx = (y * W + x) * 4;
-                      const rDiff = Math.abs(data[idx] - prev[idx]);
-                      const gDiff = Math.abs(data[idx + 1] - prev[idx + 1]);
-                      const bDiff = Math.abs(data[idx + 2] - prev[idx + 2]);
-                      const totalPixelDiff = (rDiff + gDiff + bDiff) / 3;
-
-                      if (totalPixelDiff > 13) {
-                        cellActiveCount++;
-                      }
-                    }
+                  if (diff > 14) {
+                    totalDiff += diff;
                   }
-
-                  const cellActivity = (cellActiveCount / cellTotalPixels) * 100;
-                  if (cellActivity > maxCellMotion) {
-                    maxCellMotion = cellActivity;
-                  }
-                  zoneActivePixels += cellActiveCount;
+                  sampleCount++;
                 }
               }
 
-              const motionScore = Math.min(100, Math.round(maxCellMotion * 2.5 + (zoneActivePixels / (colW * rowH)) * 70));
+              const avgDiff = sampleCount > 0 ? totalDiff / sampleCount : 0;
+              const motionScore = Math.min(100, Math.round(avgDiff * 4.5));
               currentLevels[zone.id] = motionScore;
 
-              const prevLevel = prevZoneMotionLevels.current[zone.id] || 0;
-
-              // Rising Edge Detection: Only trigger when motion accelerates upward (new finger strike)
-              const isRisingEdge = (maxCellMotion > triggerThreshold && prevLevel <= triggerThreshold) ||
-                                   (motionScore > (triggerThreshold * 2.2) && prevLevel < (triggerThreshold * 1.5));
-
-              if (isRisingEdge) {
-                zonesTriggering.push(zone.id);
+              // Motion Trigger Threshold (sens 30 -> threshold 32, sens 75 -> threshold 13, sens 95 -> threshold 5)
+              const threshold = Math.max(4, 45 - sensRef.current * 0.42);
+              if (avgDiff > threshold && !isWarmup) {
+                fireStrike(zone.id);
               }
             });
 
-            // Global Lighting & Camera Shake Immunity:
-            // If more than 3 zones trigger in the EXACT same frame, ignore as a lighting glitch/camera movement!
-            if (zonesTriggering.length > 0 && zonesTriggering.length <= 3) {
-              zonesTriggering.forEach((zoneId) => {
-                fireStrike(zoneId);
-              });
-            }
-
             setZoneMotionLevels(currentLevels);
-            prevZoneMotionLevels.current = currentLevels;
           }
 
           prevFrameRef.current = new Uint8ClampedArray(data);
@@ -238,7 +195,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     motionAnimRef.current = requestAnimationFrame(processMotion);
 
     return () => {
-      clearTimeout(calTimer);
       cancelAnimationFrame(motionAnimRef.current);
     };
   }, [mediaStream, fireStrike]);
@@ -563,7 +519,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               {isActive ? (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/50 flex items-center gap-1 shadow-sm">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  {isCalibrating ? 'CALIBRATING...' : `LIVE • ${resolution}`}
+                  LIVE • {resolution}
                 </span>
               ) : (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
@@ -606,15 +562,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           {/* Finger-Flinch Sensitivity Slider */}
           <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2.5 py-1 rounded-xl text-xs">
             <Gauge className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">FLINCH SENS:</span>
+            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">SENS:</span>
             <input
               type="range"
-              min="30"
-              max="98"
+              min="20"
+              max="95"
               value={motionSensitivity}
               onChange={(e) => setMotionSensitivity(Number(e.target.value))}
               className="w-16 sm:w-24 accent-amber-400 cursor-pointer h-1.5"
-              title={`Finger Flinch Sensitivity: ${motionSensitivity}%`}
+              title={`Motion Sensitivity: ${motionSensitivity}%`}
             />
             <span className="text-[10px] font-bold text-amber-300 w-6">{motionSensitivity}%</span>
           </div>
@@ -785,7 +741,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           <div>Stream: <b className={isActive ? 'text-emerald-400' : 'text-slate-500'}>{isActive ? 'ACTIVE' : 'OFF'}</b></div>
           <div>Resolution: <b className="text-white">{resolution}</b></div>
           <div>Fit Mode: <b className="text-cyan-400">{fitMode.toUpperCase()}</b></div>
-          <div>Flinch Sens: <b className="text-amber-400">{motionSensitivity}%</b></div>
+          <div>Motion Sens: <b className="text-amber-400">{motionSensitivity}%</b></div>
         </div>
       )}
 
@@ -895,7 +851,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                         className="h-full transition-all duration-75 rounded-full"
                         style={{
                           width: `${Math.min(100, motionLvl * 1.8)}%`,
-                          backgroundColor: motionLvl > 30 ? '#ffffff' : color,
+                          backgroundColor: motionLvl > 25 ? '#ffffff' : color,
                           boxShadow: `0 0 8px ${color}`,
                         }}
                       />
@@ -913,7 +869,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                       {zone.sub}
                     </span>
                     <span className="text-[8px] font-bold text-slate-400">
-                      {isCalibrating ? 'Calibrating...' : motionLvl > 0 ? `${motionLvl}% flinch` : 'Ready'}
+                      {motionLvl > 0 ? `${motionLvl}% motion` : 'Ready'}
                     </span>
                   </div>
                 </div>
