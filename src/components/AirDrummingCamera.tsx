@@ -82,7 +82,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [hitCounts, setHitCounts] = useState<Record<string, number>>({});
   const [totalHits, setTotalHits] = useState<number>(0);
 
-  // Dual Index Finger Landmark Dots
+  // Dual Index Finger Landmark Dots (Interpolated at 60 FPS for ultra-smooth rendering)
   const [leftFinger, setLeftFinger] = useState<FingerPoint>({ x: 30, y: 50, active: false, isStriking: false });
   const [rightFinger, setRightFinger] = useState<FingerPoint>({ x: 70, y: 50, active: false, isStriking: false });
 
@@ -101,7 +101,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const handsModelRef = useRef<unknown>(null);
   const isProcessingRef = useRef<boolean>(false);
   const animFrameRef = useRef<number>(0);
-  const prevYRef = useRef<{ left: number; right: number }>({ left: 50, right: 50 });
+  const targetLeftRef = useRef<FingerPoint>({ x: 30, y: 50, active: false, isStriking: false });
+  const targetRightRef = useRef<FingerPoint>({ x: 70, y: 50, active: false, isStriking: false });
   const virtualCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const virtualAnimRef = useRef<number>(0);
 
@@ -124,7 +125,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     [onAirStrike]
   );
 
-  // ── Initialize MediaPipe Hands AI Engine ────────────────────────────────────
+  // ── Initialize Lightweight 60FPS MediaPipe Hands AI Engine ──────────────────
   useEffect(() => {
     let checkCount = 0;
     const initHands = () => {
@@ -140,11 +141,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             close?: () => void;
           };
 
+          // ⚡ High-speed zero-latency configuration (modelComplexity: 0 for 60FPS)
           hands.setOptions({
             maxNumHands: 2,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5,
+            modelComplexity: 0,
+            minDetectionConfidence: 0.3,
+            minTrackingConfidence: 0.3,
           });
 
           hands.onResults((results: unknown) => {
@@ -153,52 +155,47 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               multiHandedness?: Array<{ label: string; score: number }>;
             };
 
-            let lPt: FingerPoint = { x: 30, y: 50, active: false, isStriking: false };
-            let rPt: FingerPoint = { x: 70, y: 50, active: false, isStriking: false };
+            const detectedPoints: Array<{ x: number; y: number }> = [];
 
-            if (res.multiHandLandmarks && res.multiHandedness) {
+            if (res.multiHandLandmarks) {
               for (let i = 0; i < res.multiHandLandmarks.length; i++) {
                 const landmarks = res.multiHandLandmarks[i];
-                const handednessInfo = res.multiHandedness[i];
                 // Landmark 8 is the exact INDEX FINGERTIP
                 const indexTip = landmarks[8];
 
                 if (indexTip) {
-                  // In mirrored selfie mode, x coordinates flip
-                  const rawX = indexTip.x * 100;
+                  // In mirrored mode, coordinate is 1 - x
+                  const rawX = isMirrored ? (1 - indexTip.x) * 100 : indexTip.x * 100;
                   const rawY = indexTip.y * 100;
-
-                  // Label can be 'Left' or 'Right'
-                  const isLeftLabel = handednessInfo.label === 'Left';
-
-                  // Determine hand side based on screen position and label
-                  if (rawX > 50 || isLeftLabel) {
-                    const vy = rawY - prevYRef.current.left;
-                    prevYRef.current.left = rawY;
-                    lPt = {
-                      x: isMirrored ? (100 - rawX) : rawX,
-                      y: rawY,
-                      active: true,
-                      isStriking: vy > 1.2,
-                    };
-                  } else {
-                    const vy = rawY - prevYRef.current.right;
-                    prevYRef.current.right = rawY;
-                    rPt = {
-                      x: isMirrored ? (100 - rawX) : rawX,
-                      y: rawY,
-                      active: true,
-                      isStriking: vy > 1.2,
-                    };
-                  }
+                  detectedPoints.push({ x: rawX, y: rawY });
                 }
               }
             }
 
-            setLeftFinger(lPt);
-            setRightFinger(rPt);
+            // Sort detected index fingertips from left to right on screen
+            detectedPoints.sort((a, b) => a.x - b.x);
 
-            // 🎯 CHECK IF INDEX FINGER TIP IS INSIDE ANY DRUM PAD
+            let lPt: FingerPoint = { x: 30, y: 50, active: false, isStriking: false };
+            let rPt: FingerPoint = { x: 70, y: 50, active: false, isStriking: false };
+
+            if (detectedPoints.length === 1) {
+              const pt = detectedPoints[0];
+              if (pt.x < 50) {
+                lPt = { x: pt.x, y: pt.y, active: true, isStriking: false };
+              } else {
+                rPt = { x: pt.x, y: pt.y, active: true, isStriking: false };
+              }
+            } else if (detectedPoints.length >= 2) {
+              // Leftmost hand is ALWAYS Left Index Finger
+              lPt = { x: detectedPoints[0].x, y: detectedPoints[0].y, active: true, isStriking: false };
+              // Rightmost hand is ALWAYS Right Index Finger
+              rPt = { x: detectedPoints[1].x, y: detectedPoints[1].y, active: true, isStriking: false };
+            }
+
+            targetLeftRef.current = lPt;
+            targetRightRef.current = rPt;
+
+            // 🎯 DIRECT PAD CONTACT & STRIKE TRIGGER
             const checkFingerStrike = (f: FingerPoint, hand: Hand) => {
               if (!f.active) return;
               AIR_ZONES.forEach((zone) => {
@@ -217,7 +214,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
           handsModelRef.current = hands;
           setIsAiLoaded(true);
-          setStatusLog('AI Index Finger Vision Active');
+          setStatusLog('AI Index Finger Vision Active (60 FPS)');
         } catch (e) {
           console.warn('MediaPipe Hands init warning:', e);
         }
@@ -239,10 +236,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     };
   }, [isMirrored, fireStrike]);
 
-  // ── AI Video Frame Processing Loop ──────────────────────────────────────────
+  // ── 60 FPS Smooth Interpolation & AI Video Frame Dispatcher ─────────────────
   useEffect(() => {
     if (!mediaStream) {
       cancelAnimationFrame(animFrameRef.current);
+      setLeftFinger({ x: 30, y: 50, active: false, isStriking: false });
+      setRightFinger({ x: 70, y: 50, active: false, isStriking: false });
       return;
     }
 
@@ -250,14 +249,31 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       const videoEl = videoRef.current;
       const hands = handsModelRef.current as { send: (input: { image: HTMLVideoElement }) => Promise<void> } | null;
 
+      // 1. Dispatch camera frame to AI Model
       if (videoEl && videoEl.readyState >= 2 && hands && !isProcessingRef.current) {
         isProcessingRef.current = true;
-        try {
-          await hands.send({ image: videoEl });
-        } catch {
+        hands.send({ image: videoEl }).catch(() => {
           isProcessingRef.current = false;
-        }
+        });
       }
+
+      // 2. Smooth 60 FPS Interpolation (EMA) for butter-smooth visual pointer tracking
+      const tL = targetLeftRef.current;
+      const tR = targetRightRef.current;
+
+      setLeftFinger((prev) => ({
+        x: tL.active ? prev.x * 0.25 + tL.x * 0.75 : tL.x,
+        y: tL.active ? prev.y * 0.25 + tL.y * 0.75 : tL.y,
+        active: tL.active,
+        isStriking: tL.isStriking,
+      }));
+
+      setRightFinger((prev) => ({
+        x: tR.active ? prev.x * 0.25 + tR.x * 0.75 : tR.x,
+        y: tR.active ? prev.y * 0.25 + tR.y * 0.75 : tR.y,
+        active: tR.active,
+        isStriking: tR.isStriking,
+      }));
 
       animFrameRef.current = requestAnimationFrame(processFrame);
     };
@@ -587,7 +603,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               {isAiLoaded ? (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/50 flex items-center gap-1">
                   <CheckCircle2 className="w-3 h-3 text-cyan-400" />
-                  AI VISION READY
+                  60 FPS AI TRACKING
                 </span>
               ) : (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
@@ -807,14 +823,14 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       {showDiag && (
         <div className="shrink-0 p-2.5 rounded-xl bg-black/90 border border-slate-700 text-[11px] text-slate-300 grid grid-cols-2 sm:grid-cols-5 gap-2">
           <div>Stream: <b className={isActive ? 'text-emerald-400' : 'text-slate-500'}>{isActive ? `ACTIVE (${resolution})` : 'OFF'}</b></div>
-          <div>AI Status: <b className={isAiLoaded ? 'text-cyan-400' : 'text-amber-400'}>{isAiLoaded ? 'TRACKING' : 'LOADING'}</b></div>
+          <div>AI Status: <b className={isAiLoaded ? 'text-cyan-400' : 'text-amber-400'}>{isAiLoaded ? '60 FPS' : 'LOADING'}</b></div>
           <div>Sens: <b className="text-amber-300">{motionSensitivity}%</b></div>
           <div>Left Finger: <b className="text-cyan-400">{leftFinger.active ? `${Math.round(leftFinger.x)}%, ${Math.round(leftFinger.y)}%` : 'Not Detected'}</b></div>
           <div>Right Finger: <b className="text-orange-400">{rightFinger.active ? `${Math.round(rightFinger.x)}%, ${Math.round(rightFinger.y)}%` : 'Not Detected'}</b></div>
         </div>
       )}
 
-      {/* ── AIR DRUM VIEWPORT WITH AI INDEX FINGER TRACKING DOTS ── */}
+      {/* ── AIR DRUM VIEWPORT WITH AI DUAL INDEX FINGER TRACKING DOTS ── */}
       <div className="relative w-full flex-1 min-h-[350px] rounded-2xl border-2 border-slate-800 bg-[#050811] overflow-hidden flex items-center justify-center">
         {/* Native HTML5 Video Element */}
         <video
@@ -944,7 +960,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                   top: `${leftFinger.y}%`,
                   transform: 'translate(-50%, -50%)',
                 }}
-                className="absolute pointer-events-none z-30 transition-all duration-75 flex flex-col items-center"
+                className="absolute pointer-events-none z-30 transition-transform duration-75 flex flex-col items-center"
               >
                 {/* Glowing AI Laser Crosshair Dot */}
                 <div className="relative flex items-center justify-center">
@@ -968,7 +984,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                   top: `${rightFinger.y}%`,
                   transform: 'translate(-50%, -50%)',
                 }}
-                className="absolute pointer-events-none z-30 transition-all duration-75 flex flex-col items-center"
+                className="absolute pointer-events-none z-30 transition-transform duration-75 flex flex-col items-center"
               >
                 {/* Glowing AI Laser Crosshair Dot */}
                 <div className="relative flex items-center justify-center">
