@@ -17,7 +17,8 @@ import {
   Gauge, 
   Flame,
   Zap,
-  Target
+  Target,
+  CheckCircle2
 } from 'lucide-react';
 
 interface AirDrummingCameraProps {
@@ -55,7 +56,7 @@ interface FingerPoint {
   x: number; // 0 to 100%
   y: number; // 0 to 100%
   active: boolean;
-  velocity: number;
+  isStriking: boolean;
 }
 
 export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
@@ -75,37 +76,34 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   // Camera Dimension & Layout Fit
   const [fitMode, setFitMode] = useState<FitMode>('cover');
 
-  // Motion Detection Settings
+  // AI Finger Tracking State
+  const [isAiLoaded, setIsAiLoaded] = useState<boolean>(false);
   const [motionSensitivity, setMotionSensitivity] = useState<number>(75); // 1-100
   const [hitCounts, setHitCounts] = useState<Record<string, number>>({});
   const [totalHits, setTotalHits] = useState<number>(0);
-  const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
 
-  // Dual Index Finger Tracking Points (Rendered on screen as Glowing Dots)
-  const [leftFinger, setLeftFinger] = useState<FingerPoint>({ x: 30, y: 50, active: false, velocity: 0 });
-  const [rightFinger, setRightFinger] = useState<FingerPoint>({ x: 70, y: 50, active: false, velocity: 0 });
+  // Dual Index Finger Landmark Dots
+  const [leftFinger, setLeftFinger] = useState<FingerPoint>({ x: 30, y: 50, active: false, isStriking: false });
+  const [rightFinger, setRightFinger] = useState<FingerPoint>({ x: 70, y: 50, active: false, isStriking: false });
 
   // Live Telemetry & Diagnostics
   const [resolution, setResolution] = useState<string>('0×0');
   const [deviceLabel, setDeviceLabel] = useState<string>('');
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
-  const [statusLog, setStatusLog] = useState<string>('Ready to connect camera.');
+  const [statusLog, setStatusLog] = useState<string>('Initializing AI Index Finger Vision...');
   const [showDiag, setShowDiag] = useState<boolean>(false);
   const [isBlackStream, setIsBlackStream] = useState<boolean>(false);
   const [videoStats, setVideoStats] = useState({ readyState: 0, paused: true, currentTime: 0 });
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastHit = useRef<Record<string, number>>({});
-  const streamStartTimeRef = useRef<number>(0);
-  const bgFrameRef = useRef<Float32Array | null>(null);
-  const prevFingerPos = useRef<{ lx: number; ly: number; rx: number; ry: number }>({ lx: 30, ly: 50, rx: 70, ry: 50 });
+  const handsModelRef = useRef<unknown>(null);
+  const isProcessingRef = useRef<boolean>(false);
+  const animFrameRef = useRef<number>(0);
+  const prevYRef = useRef<{ left: number; right: number }>({ left: 50, right: 50 });
   const virtualCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const virtualAnimRef = useRef<number>(0);
-  const motionAnimRef = useRef<number>(0);
-  const motionCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const sensRef = useRef<number>(motionSensitivity);
-  sensRef.current = motionSensitivity;
 
   // ── Strike Trigger (Ultra-Fast 50ms Cooldown for Instant Drum Rolls) ────────
   const fireStrike = useCallback(
@@ -126,172 +124,150 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     [onAirStrike]
   );
 
-  // ── Index Finger Tracking & Downstroke Strike Engine ────────────────────────
+  // ── Initialize MediaPipe Hands AI Engine ────────────────────────────────────
   useEffect(() => {
-    if (!mediaStream) {
-      cancelAnimationFrame(motionAnimRef.current);
-      setLeftFinger({ x: 30, y: 50, active: false, velocity: 0 });
-      setRightFinger({ x: 70, y: 50, active: false, velocity: 0 });
-      bgFrameRef.current = null;
-      return;
-    }
-
-    streamStartTimeRef.current = performance.now();
-    setIsCalibrating(true);
-    const calTimer = setTimeout(() => setIsCalibrating(false), 700);
-
-    const W = 160;
-    const H = 90;
-    const procCanvas = motionCanvasRef.current || document.createElement('canvas');
-    procCanvas.width = W;
-    procCanvas.height = H;
-    motionCanvasRef.current = procCanvas;
-    const ctx = procCanvas.getContext('2d', { willReadFrequently: true });
-
-    const processMotion = () => {
-      const videoEl = videoRef.current;
-      const now = performance.now();
-      const isWarmup = now - streamStartTimeRef.current < 700;
-
-      if (videoEl && videoEl.readyState >= 2 && ctx) {
+    let checkCount = 0;
+    const initHands = () => {
+      const win = window as unknown as { Hands?: new (cfg: { locateFile: (f: string) => string }) => unknown };
+      if (typeof win.Hands === 'function') {
         try {
-          ctx.drawImage(videoEl, 0, 0, W, H);
-          const imgData = ctx.getImageData(0, 0, W, H);
-          const data = imgData.data;
-          let bg = bgFrameRef.current;
+          const hands = new win.Hands({
+            locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+          }) as {
+            setOptions: (opts: unknown) => void;
+            onResults: (cb: (res: unknown) => void) => void;
+            send: (input: { image: HTMLVideoElement }) => Promise<void>;
+            close?: () => void;
+          };
 
-          if (!bg || bg.length !== data.length) {
-            bg = new Float32Array(data.length);
-            for (let i = 0; i < data.length; i++) {
-              bg[i] = data[i];
-            }
-            bgFrameRef.current = bg;
-          }
+          hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+          });
 
-          if (!isWarmup) {
-            // Find the active fingertip centers for Left and Right sides of the frame
-            let leftSumX = 0, leftSumY = 0, leftCount = 0;
-            let rightSumX = 0, rightSumY = 0, rightCount = 0;
+          hands.onResults((results: unknown) => {
+            const res = results as {
+              multiHandLandmarks?: Array<Array<{ x: number; y: number; z: number }>>;
+              multiHandedness?: Array<{ label: string; score: number }>;
+            };
 
-            const midX = Math.floor(W / 2);
+            let lPt: FingerPoint = { x: 30, y: 50, active: false, isStriking: false };
+            let rPt: FingerPoint = { x: 70, y: 50, active: false, isStriking: false };
 
-            for (let y = 4; y < H - 4; y += 2) {
-              for (let x = 4; x < W - 4; x += 2) {
-                const idx = (y * W + x) * 4;
-                const rDiff = Math.abs(data[idx] - bg[idx]);
-                const gDiff = Math.abs(data[idx + 1] - bg[idx + 1]);
-                const bDiff = Math.abs(data[idx + 2] - bg[idx + 2]);
-                const diff = (rDiff + gDiff + bDiff) / 3;
+            if (res.multiHandLandmarks && res.multiHandedness) {
+              for (let i = 0; i < res.multiHandLandmarks.length; i++) {
+                const landmarks = res.multiHandLandmarks[i];
+                const handednessInfo = res.multiHandedness[i];
+                // Landmark 8 is the exact INDEX FINGERTIP
+                const indexTip = landmarks[8];
 
-                // Moving finger/stick threshold
-                if (diff >= 26) {
-                  // Upward bias: fingertip is the leading edge (topmost moving points receive more weight)
-                  const weight = (H - y) / H + 0.5;
+                if (indexTip) {
+                  // In mirrored selfie mode, x coordinates flip
+                  const rawX = indexTip.x * 100;
+                  const rawY = indexTip.y * 100;
 
-                  if (x < midX) {
-                    leftSumX += x * weight;
-                    leftSumY += y * weight;
-                    leftCount += weight;
+                  // Label can be 'Left' or 'Right'
+                  const isLeftLabel = handednessInfo.label === 'Left';
+
+                  // Determine hand side based on screen position and label
+                  if (rawX > 50 || isLeftLabel) {
+                    const vy = rawY - prevYRef.current.left;
+                    prevYRef.current.left = rawY;
+                    lPt = {
+                      x: isMirrored ? (100 - rawX) : rawX,
+                      y: rawY,
+                      active: true,
+                      isStriking: vy > 1.2,
+                    };
                   } else {
-                    rightSumX += x * weight;
-                    rightSumY += y * weight;
-                    rightCount += weight;
+                    const vy = rawY - prevYRef.current.right;
+                    prevYRef.current.right = rawY;
+                    rPt = {
+                      x: isMirrored ? (100 - rawX) : rawX,
+                      y: rawY,
+                      active: true,
+                      isStriking: vy > 1.2,
+                    };
                   }
                 }
               }
             }
 
-            // Calculate smoothed finger positions (0 to 100% of viewport)
-            const prev = prevFingerPos.current;
+            setLeftFinger(lPt);
+            setRightFinger(rPt);
 
-            let curLx = prev.lx;
-            let curLy = prev.ly;
-            let lActive = false;
-            let lVel = 0;
-
-            if (leftCount > 6) {
-              const targetLx = (leftSumX / leftCount / W) * 100;
-              const targetLy = (leftSumY / leftCount / H) * 100;
-              // Fast responsive smoothing
-              curLx = prev.lx * 0.4 + targetLx * 0.6;
-              curLy = prev.ly * 0.4 + targetLy * 0.6;
-              lVel = Math.max(0, curLy - prev.ly); // Downward velocity
-              lActive = true;
-            }
-
-            let curRx = prev.rx;
-            let curRy = prev.ry;
-            let rActive = false;
-            let rVel = 0;
-
-            if (rightCount > 6) {
-              const targetRx = (rightSumX / rightCount / W) * 100;
-              const targetRy = (rightSumY / rightCount / H) * 100;
-              curRx = prev.rx * 0.4 + targetRx * 0.6;
-              curRy = prev.ry * 0.4 + targetRy * 0.6;
-              rVel = Math.max(0, curRy - prev.ry); // Downward velocity
-              rActive = true;
-            }
-
-            prevFingerPos.current = { lx: curLx, ly: curLy, rx: curRx, ry: curRy };
-
-            setLeftFinger({
-              x: Math.round(curLx),
-              y: Math.round(curLy),
-              active: lActive,
-              velocity: Math.round(lVel * 10),
-            });
-
-            setRightFinger({
-              x: Math.round(curRx),
-              y: Math.round(curRy),
-              active: rActive,
-              velocity: Math.round(rVel * 10),
-            });
-
-            // 🎯 CHECK IF FINGER DOT STRIKES ANY DRUM PART
-            const checkFingerHit = (fx: number, fy: number, fActive: boolean, hand: Hand) => {
-              if (!fActive) return;
-
+            // 🎯 CHECK IF INDEX FINGER TIP IS INSIDE ANY DRUM PAD
+            const checkFingerStrike = (f: FingerPoint, hand: Hand) => {
+              if (!f.active) return;
               AIR_ZONES.forEach((zone) => {
-                const inX = fx >= zone.leftPct && fx <= (zone.leftPct + zone.widthPct);
-                const inY = fy >= zone.topPct && fy <= (zone.topPct + zone.heightPct);
-
+                const inX = f.x >= zone.leftPct && f.x <= (zone.leftPct + zone.widthPct);
+                const inY = f.y >= zone.topPct && f.y <= (zone.topPct + zone.heightPct);
                 if (inX && inY) {
                   fireStrike(zone.id, hand);
                 }
               });
             };
 
-            // Mirroring adjustments
-            const effLeftX = isMirrored ? (100 - curLx) : curLx;
-            const effRightX = isMirrored ? (100 - curRx) : curRx;
+            checkFingerStrike(lPt, 'LEFT');
+            checkFingerStrike(rPt, 'RIGHT');
+            isProcessingRef.current = false;
+          });
 
-            checkFingerHit(effLeftX, curLy, lActive, 'LEFT');
-            checkFingerHit(effRightX, curRy, rActive, 'RIGHT');
-          }
-
-          // Leaky background adaptation (smooth 50ms recovery)
-          const alpha = 0.35;
-          for (let i = 0; i < data.length; i += 4) {
-            bg[i] = bg[i] * (1 - alpha) + data[i] * alpha;
-            bg[i + 1] = bg[i + 1] * (1 - alpha) + data[i + 1] * alpha;
-            bg[i + 2] = bg[i + 2] * (1 - alpha) + data[i + 2] * alpha;
-          }
+          handsModelRef.current = hands;
+          setIsAiLoaded(true);
+          setStatusLog('AI Index Finger Vision Active');
         } catch (e) {
-          console.warn('Finger tracking frame skip:', e);
+          console.warn('MediaPipe Hands init warning:', e);
+        }
+      } else {
+        checkCount++;
+        if (checkCount < 30) {
+          setTimeout(initHands, 200);
         }
       }
-      motionAnimRef.current = requestAnimationFrame(processMotion);
     };
 
-    motionAnimRef.current = requestAnimationFrame(processMotion);
+    initHands();
 
     return () => {
-      clearTimeout(calTimer);
-      cancelAnimationFrame(motionAnimRef.current);
+      const h = handsModelRef.current as { close?: () => void } | null;
+      if (h && typeof h.close === 'function') {
+        h.close();
+      }
     };
-  }, [mediaStream, isMirrored, fireStrike]);
+  }, [isMirrored, fireStrike]);
+
+  // ── AI Video Frame Processing Loop ──────────────────────────────────────────
+  useEffect(() => {
+    if (!mediaStream) {
+      cancelAnimationFrame(animFrameRef.current);
+      return;
+    }
+
+    const processFrame = async () => {
+      const videoEl = videoRef.current;
+      const hands = handsModelRef.current as { send: (input: { image: HTMLVideoElement }) => Promise<void> } | null;
+
+      if (videoEl && videoEl.readyState >= 2 && hands && !isProcessingRef.current) {
+        isProcessingRef.current = true;
+        try {
+          await hands.send({ image: videoEl });
+        } catch {
+          isProcessingRef.current = false;
+        }
+      }
+
+      animFrameRef.current = requestAnimationFrame(processFrame);
+    };
+
+    animFrameRef.current = requestAnimationFrame(processFrame);
+
+    return () => {
+      cancelAnimationFrame(animFrameRef.current);
+    };
+  }, [mediaStream]);
 
   // ── Enumerate Connected Video Cameras ───────────────────────────────────────
   const refreshDevices = useCallback(async () => {
@@ -330,7 +306,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       const handleMeta = () => {
         if (videoEl.videoWidth > 0) {
           setResolution(`${videoEl.videoWidth}×${videoEl.videoHeight}`);
-          setStatusLog(`Streaming: ${videoEl.videoWidth}×${videoEl.videoHeight}`);
+          setStatusLog(`Live Feed: ${videoEl.videoWidth}×${videoEl.videoHeight}`);
         }
         videoEl.play().catch((e) => console.log('play on loadedmetadata:', e));
       };
@@ -468,18 +444,17 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     const renderAnim = () => {
       t += 0.045;
       if (ctx) {
-        // Gradient backdrop
         const grad = ctx.createLinearGradient(0, 0, 640, 360);
         grad.addColorStop(0, '#090e1c');
         grad.addColorStop(1, '#1e1b4b');
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, 640, 360);
 
-        // Animated neon drumsticks / moving sensors
+        // Moving simulated index fingertip dots
         const x1 = 320 + Math.sin(t) * 220;
         const y1 = 180 + Math.cos(t * 1.6) * 110;
         ctx.beginPath();
-        ctx.arc(x1, y1, 35, 0, Math.PI * 2);
+        ctx.arc(x1, y1, 25, 0, Math.PI * 2);
         ctx.fillStyle = '#00E5FF';
         ctx.shadowColor = '#00E5FF';
         ctx.shadowBlur = 25;
@@ -488,21 +463,20 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         const x2 = 320 - Math.sin(t * 1.4) * 200;
         const y2 = 180 - Math.cos(t * 1.2) * 100;
         ctx.beginPath();
-        ctx.arc(x2, y2, 32, 0, Math.PI * 2);
+        ctx.arc(x2, y2, 25, 0, Math.PI * 2);
         ctx.fillStyle = '#FF6D00';
         ctx.shadowColor = '#FF6D00';
         ctx.shadowBlur = 25;
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        // Overlay Text
         ctx.font = 'bold 18px monospace';
         ctx.fillStyle = '#ffffff';
         ctx.textAlign = 'center';
         ctx.fillText('🌈 VIRTUAL TEST CAMERA PATTERN', 320, 45);
         ctx.font = '13px monospace';
         ctx.fillStyle = '#94a3b8';
-        ctx.fillText('Moving objects trigger optical flow drum strikes', 320, 75);
+        ctx.fillText('Moving objects trigger index fingertip strikes', 320, 75);
       }
       virtualAnimRef.current = requestAnimationFrame(renderAnim);
     };
@@ -518,7 +492,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   // ── Stop Camera ─────────────────────────────────────────────────────────────
   const stopCamera = () => {
     cancelAnimationFrame(virtualAnimRef.current);
-    cancelAnimationFrame(motionAnimRef.current);
+    cancelAnimationFrame(animFrameRef.current);
     if (mediaStream) {
       mediaStream.getTracks().forEach((t) => t.stop());
       setMediaStream(null);
@@ -549,7 +523,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   useEffect(() => {
     return () => {
       cancelAnimationFrame(virtualAnimRef.current);
-      cancelAnimationFrame(motionAnimRef.current);
+      cancelAnimationFrame(animFrameRef.current);
       if (mediaStream) {
         mediaStream.getTracks().forEach((t) => t.stop());
       }
@@ -610,19 +584,19 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               <h2 className="font-display font-black text-xs sm:text-sm text-white tracking-wide">
                 INDEX FINGER AIR DRUMMING
               </h2>
-              {isActive ? (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/50 flex items-center gap-1 shadow-sm">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  {isCalibrating ? 'CALIBRATING...' : `LIVE • ${resolution}`}
+              {isAiLoaded ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/50 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-cyan-400" />
+                  AI VISION READY
                 </span>
               ) : (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                  STANDBY
+                  LOADING AI...
                 </span>
               )}
               {totalHits > 0 && (
-                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/40 flex items-center gap-1">
-                  <Flame className="w-3 h-3 text-cyan-400" />
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-orange-950 text-orange-300 border border-orange-500/40 flex items-center gap-1">
+                  <Flame className="w-3 h-3 text-orange-400" />
                   {totalHits} STRIKES
                 </span>
               )}
@@ -653,7 +627,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </select>
           </div>
 
-          {/* Instant Flinch Sensitivity Slider */}
+          {/* Finger Sensitivity Slider */}
           <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2.5 py-1 rounded-xl text-xs">
             <Gauge className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">DOT SENS:</span>
@@ -831,15 +805,16 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
       {/* ── LIVE TELEMETRY DRAWER ── */}
       {showDiag && (
-        <div className="shrink-0 p-2.5 rounded-xl bg-black/90 border border-slate-700 text-[11px] text-slate-300 grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <div>Stream: <b className={isActive ? 'text-emerald-400' : 'text-slate-500'}>{isActive ? 'ACTIVE' : 'OFF'}</b></div>
-          <div>Resolution: <b className="text-white">{resolution}</b></div>
-          <div>Left Finger: <b className="text-cyan-400">{leftFinger.active ? `${leftFinger.x}%, ${leftFinger.y}%` : 'Searching'}</b></div>
-          <div>Right Finger: <b className="text-orange-400">{rightFinger.active ? `${rightFinger.x}%, ${rightFinger.y}%` : 'Searching'}</b></div>
+        <div className="shrink-0 p-2.5 rounded-xl bg-black/90 border border-slate-700 text-[11px] text-slate-300 grid grid-cols-2 sm:grid-cols-5 gap-2">
+          <div>Stream: <b className={isActive ? 'text-emerald-400' : 'text-slate-500'}>{isActive ? `ACTIVE (${resolution})` : 'OFF'}</b></div>
+          <div>AI Status: <b className={isAiLoaded ? 'text-cyan-400' : 'text-amber-400'}>{isAiLoaded ? 'TRACKING' : 'LOADING'}</b></div>
+          <div>Sens: <b className="text-amber-300">{motionSensitivity}%</b></div>
+          <div>Left Finger: <b className="text-cyan-400">{leftFinger.active ? `${Math.round(leftFinger.x)}%, ${Math.round(leftFinger.y)}%` : 'Not Detected'}</b></div>
+          <div>Right Finger: <b className="text-orange-400">{rightFinger.active ? `${Math.round(rightFinger.x)}%, ${Math.round(rightFinger.y)}%` : 'Not Detected'}</b></div>
         </div>
       )}
 
-      {/* ── AIR DRUM VIEWPORT WITH LIVE INDEX FINGER TRACKING DOTS ── */}
+      {/* ── AIR DRUM VIEWPORT WITH AI INDEX FINGER TRACKING DOTS ── */}
       <div className="relative w-full flex-1 min-h-[350px] rounded-2xl border-2 border-slate-800 bg-[#050811] overflow-hidden flex items-center justify-center">
         {/* Native HTML5 Video Element */}
         <video
@@ -864,7 +839,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </div>
             <div>
               <p className="font-bold text-white text-sm">Camera is currently inactive</p>
-              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" to begin index finger air drumming</p>
+              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" to begin AI index finger air drumming</p>
             </div>
             <div className="flex items-center gap-2 mt-2">
               <button
@@ -944,7 +919,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                         {hits} hits
                       </span>
                     ) : (
-                      <span className="text-[8px] text-slate-500">Tap to test</span>
+                      <span className="text-[8px] text-slate-500">Touch with finger</span>
                     )}
                   </div>
 
@@ -961,49 +936,49 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               );
             })}
 
-            {/* 🔵 LEFT INDEX FINGER TRACKING DOT */}
+            {/* 🔵 AI LEFT INDEX FINGER TRACKING DOT */}
             {leftFinger.active && (
               <div
                 style={{
-                  left: `${isMirrored ? (100 - leftFinger.x) : leftFinger.x}%`,
+                  left: `${leftFinger.x}%`,
                   top: `${leftFinger.y}%`,
                   transform: 'translate(-50%, -50%)',
                 }}
                 className="absolute pointer-events-none z-30 transition-all duration-75 flex flex-col items-center"
               >
-                {/* Glowing Laser Dot */}
+                {/* Glowing AI Laser Crosshair Dot */}
                 <div className="relative flex items-center justify-center">
-                  <div className="w-6 h-6 rounded-full bg-cyan-400/40 animate-ping absolute" />
-                  <div className="w-5 h-5 rounded-full bg-cyan-400 border-2 border-white shadow-[0_0_20px_#00E5FF] flex items-center justify-center">
-                    <div className="w-2 h-2 rounded-full bg-white" />
+                  <div className="w-7 h-7 rounded-full bg-cyan-400/40 animate-ping absolute" />
+                  <div className="w-6 h-6 rounded-full bg-cyan-400 border-2 border-white shadow-[0_0_25px_#00E5FF] flex items-center justify-center">
+                    <div className="w-2.5 h-2.5 rounded-full bg-white" />
                   </div>
                 </div>
                 {/* Tracker Label */}
-                <span className="mt-1 text-[9px] font-black px-1.5 py-0.2 rounded bg-cyan-950/90 text-cyan-300 border border-cyan-400 shadow-md whitespace-nowrap">
+                <span className="mt-1 text-[9px] font-black px-2 py-0.5 rounded bg-cyan-950/90 text-cyan-300 border border-cyan-400 shadow-md whitespace-nowrap">
                   LH INDEX
                 </span>
               </div>
             )}
 
-            {/* 🟠 RIGHT INDEX FINGER TRACKING DOT */}
+            {/* 🟠 AI RIGHT INDEX FINGER TRACKING DOT */}
             {rightFinger.active && (
               <div
                 style={{
-                  left: `${isMirrored ? (100 - rightFinger.x) : rightFinger.x}%`,
+                  left: `${rightFinger.x}%`,
                   top: `${rightFinger.y}%`,
                   transform: 'translate(-50%, -50%)',
                 }}
                 className="absolute pointer-events-none z-30 transition-all duration-75 flex flex-col items-center"
               >
-                {/* Glowing Laser Dot */}
+                {/* Glowing AI Laser Crosshair Dot */}
                 <div className="relative flex items-center justify-center">
-                  <div className="w-6 h-6 rounded-full bg-orange-400/40 animate-ping absolute" />
-                  <div className="w-5 h-5 rounded-full bg-orange-500 border-2 border-white shadow-[0_0_20px_#FF6D00] flex items-center justify-center">
-                    <div className="w-2 h-2 rounded-full bg-white" />
+                  <div className="w-7 h-7 rounded-full bg-orange-400/40 animate-ping absolute" />
+                  <div className="w-6 h-6 rounded-full bg-orange-500 border-2 border-white shadow-[0_0_25px_#FF6D00] flex items-center justify-center">
+                    <div className="w-2.5 h-2.5 rounded-full bg-white" />
                   </div>
                 </div>
                 {/* Tracker Label */}
-                <span className="mt-1 text-[9px] font-black px-1.5 py-0.2 rounded bg-orange-950/90 text-orange-300 border border-orange-400 shadow-md whitespace-nowrap">
+                <span className="mt-1 text-[9px] font-black px-2 py-0.5 rounded bg-orange-950/90 text-orange-300 border border-orange-400 shadow-md whitespace-nowrap">
                   RH INDEX
                 </span>
               </div>
