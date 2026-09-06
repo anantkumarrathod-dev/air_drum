@@ -8,17 +8,17 @@ import {
   Video, 
   AlertCircle, 
   Layers, 
-  Maximize2, 
   Minimize2, 
   Play, 
   Activity, 
   Sparkles, 
   Tv, 
   Gauge, 
-  Flame,
-  Zap,
-  Target,
-  CheckCircle2
+  Flame, 
+  Zap, 
+  Target, 
+  CheckCircle2, 
+  Expand 
 } from 'lucide-react';
 
 interface AirDrummingCameraProps {
@@ -38,19 +38,24 @@ interface AirZoneConfig {
   heightPct: number;
 }
 
-// Ergonomic 8-Part Acoustic Drum Layout
+// Fullscreen Ergonomic 8-Part Acoustic Drum Layout (Full Sensor Reach)
 const AIR_ZONES: AirZoneConfig[] = [
-  { id: 'crash',        label: 'CRASH',     sub: '16" Cymbal',  type: 'cymbal', leftPct: 3,  topPct: 3,  widthPct: 22, heightPct: 29 },
-  { id: 'high_tom',     label: 'HIGH TOM',  sub: '10" Tom',     type: 'tom',    leftPct: 27, topPct: 3,  widthPct: 22, heightPct: 29 },
-  { id: 'mid_tom',      label: 'MID TOM',   sub: '12" Tom',     type: 'tom',    leftPct: 51, topPct: 3,  widthPct: 22, heightPct: 29 },
-  { id: 'ride',         label: 'RIDE',      sub: '20" Cymbal',  type: 'cymbal', leftPct: 75, topPct: 3,  widthPct: 22, heightPct: 29 },
-  { id: 'hihat_closed', label: 'HI-HAT',    sub: '14" Cymbals', type: 'cymbal', leftPct: 3,  topPct: 35, widthPct: 22, heightPct: 31 },
-  { id: 'snare',        label: 'SNARE',     sub: '14" Snare',   type: 'snare',  leftPct: 27, topPct: 35, widthPct: 22, heightPct: 31 },
-  { id: 'floor_tom',    label: 'FLOOR TOM', sub: '16" Floor',   type: 'tom',    leftPct: 75, topPct: 35, widthPct: 22, heightPct: 31 },
-  { id: 'bass',         label: 'BASS DRUM', sub: '22" Kick',    type: 'bass',   leftPct: 33, topPct: 68, widthPct: 34, heightPct: 29 },
+  // Top Row: Cymbals & High/Mid Toms
+  { id: 'crash',        label: 'CRASH',     sub: '16" Cymbal',  type: 'cymbal', leftPct: 2,  topPct: 2,  widthPct: 22.5, heightPct: 27 },
+  { id: 'high_tom',     label: 'HIGH TOM',  sub: '10" Tom',     type: 'tom',    leftPct: 26.5, topPct: 2,  widthPct: 22.5, heightPct: 27 },
+  { id: 'mid_tom',      label: 'MID TOM',   sub: '12" Tom',     type: 'tom',    leftPct: 51, topPct: 2,  widthPct: 22.5, heightPct: 27 },
+  { id: 'ride',         label: 'RIDE',      sub: '20" Cymbal',  type: 'cymbal', leftPct: 75.5, topPct: 2,  widthPct: 22.5, heightPct: 27 },
+
+  // Mid Row: Hi-Hat, Snare, Floor Tom
+  { id: 'hihat_closed', label: 'HI-HAT',    sub: '14" Cymbals', type: 'cymbal', leftPct: 2,  topPct: 31, widthPct: 22.5, heightPct: 28 },
+  { id: 'snare',        label: 'SNARE',     sub: '14" Snare',   type: 'snare',  leftPct: 26.5, topPct: 31, widthPct: 22.5, heightPct: 28 },
+  { id: 'floor_tom',    label: 'FLOOR TOM', sub: '16" Floor',   type: 'tom',    leftPct: 75.5, topPct: 31, widthPct: 22.5, heightPct: 28 },
+
+  // Bottom Center: Extra Wide Accessible Bass Drum (Easy Reach)
+  { id: 'bass',         label: 'BASS DRUM', sub: '22" Kick',    type: 'bass',   leftPct: 26, topPct: 61, widthPct: 48, heightPct: 36 },
 ];
 
-type FitMode = 'cover' | 'contain' | 'fill' | '16:9' | '4:3';
+type FitMode = 'fill' | 'cover' | 'contain' | '16:9' | '4:3';
 
 interface FingertipPoint {
   x: number; // 0 to 100%
@@ -74,8 +79,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [flashes, setFlashes] = useState<Record<string, boolean>>({});
   const [isVirtualCam, setIsVirtualCam] = useState<boolean>(false);
 
-  // Camera Dimension & Layout Fit
-  const [fitMode, setFitMode] = useState<FitMode>('cover');
+  // Camera Dimension & Layout Fit (Default 'fill' to access 100% full screen with no cropping)
+  const [fitMode, setFitMode] = useState<FitMode>('fill');
 
   // AI Finger Tracking State
   const [isAiLoaded, setIsAiLoaded] = useState<boolean>(false);
@@ -92,11 +97,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [deviceLabel, setDeviceLabel] = useState<string>('');
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
-  const [statusLog, setStatusLog] = useState<string>('Initializing Fingertip Tip-Locked AI...');
+  const [statusLog, setStatusLog] = useState<string>('Initializing Fullscreen Fingertip AI...');
   const [showDiag, setShowDiag] = useState<boolean>(false);
   const [isBlackStream, setIsBlackStream] = useState<boolean>(false);
   const [videoStats, setVideoStats] = useState({ readyState: 0, paused: true, currentTime: 0 });
 
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastHit = useRef<Record<string, number>>({});
   const handsModelRef = useRef<unknown>(null);
@@ -120,7 +126,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const fireStrike = useCallback(
     (id: DrumInstrumentId, hand: Hand) => {
       const now = performance.now();
-      // 30ms cooldown = up to 33 hits/second (full-speed buzz rolls & machine-gun single stroke rolls)
       if (now - (lastHit.current[id] || 0) < 30) return;
       lastHit.current[id] = now;
 
@@ -175,8 +180,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                 const tip = landmarks[8];
 
                 if (tip) {
+                  // Map directly to 0-100% viewport space with no bottom clipping
                   const rawX = isMirrored ? (1 - tip.x) * 100 : tip.x * 100;
-                  const rawY = tip.y * 100;
+                  const rawY = Math.min(100, Math.max(0, tip.y * 100));
                   detectedTips.push({ x: rawX, y: rawY });
                 }
               }
@@ -202,22 +208,22 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               // Check which zone the fingertip is inside
               let currentZoneId: DrumInstrumentId | null = null;
               AIR_ZONES.forEach((zone) => {
-                const inX = tipPos.x >= zone.leftPct && tipPos.x <= (zone.leftPct + zone.widthPct);
-                const inY = tipPos.y >= zone.topPct && tipPos.y <= (zone.topPct + zone.heightPct);
+                const inX = tipPos.x >= (zone.leftPct - 1) && tipPos.x <= (zone.leftPct + zone.widthPct + 1);
+                const inY = tipPos.y >= (zone.topPct - 1) && tipPos.y <= (zone.topPct + zone.heightPct + 1);
                 if (inX && inY) {
                   currentZoneId = zone.id;
                 }
               });
 
               // 🥁 DRUM ROLL & STRIKE CONDITIONS:
-              // 1. Apex Direction Reversal (Rebound -> Downstroke): prevVy was negative (rebounding up) and currentVy turns positive (downstroke)
+              // 1. Apex Direction Reversal (Rebound -> Downstroke)
               const isApexReversal = prevVy < 0 && currentVy > 0.15;
               
-              // 2. Fast Downward Flinch / Snap (Direct flinch while hovering or inside pad)
+              // 2. Fast Downward Flinch / Snap
               const flinchSensitivityThreshold = Math.max(0.3, 1.4 - sensRef.current * 0.013);
               const isFastFlinch = currentVy >= flinchSensitivityThreshold;
 
-              // 3. Zone Entry Stroke (Fingertip crossed into the pad)
+              // 3. Zone Entry Stroke
               const isZoneEntry = currentZoneId !== null && prevRef.current.inZone !== currentZoneId;
 
               const isStriking = (isApexReversal || isFastFlinch || isZoneEntry);
@@ -226,7 +232,6 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                 fireStrike(currentZoneId, hand);
               }
 
-              // Update state for next frame
               prevRef.current = {
                 y: tipPos.y,
                 vy: currentVy,
@@ -264,7 +269,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
           handsModelRef.current = hands;
           setIsAiLoaded(true);
-          setStatusLog('Index Fingertip Vision Active (60 FPS)');
+          setStatusLog('Fullscreen Fingertip AI Active (60 FPS)');
         } catch (e) {
           console.warn('MediaPipe Hands init warning:', e);
         }
@@ -429,7 +434,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     setCameraError(null);
     setIsStarting(true);
     setIsVirtualCam(false);
-    setStatusLog('Requesting high-speed 60FPS camera stream...');
+    setStatusLog('Requesting 60FPS camera stream...');
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       const err = 'Camera API not supported or blocked by browser (requires HTTPS).';
@@ -464,7 +469,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
       const track = stream.getVideoTracks()[0];
       if (track) {
-        setDeviceLabel(track.label || 'Webcam');
+        setDeviceLabel(track.label || 'High-Speed Webcam');
         setStatusLog(`Connected: ${track.label || 'Camera'} (60 FPS)`);
 
         track.onended = () => {
@@ -598,8 +603,9 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   }, [mediaStream]);
 
   const toggleFullscreen = () => {
+    const el = containerRef.current || document.documentElement;
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
+      el.requestFullscreen().catch(() => {});
       setIsFullscreen(true);
     } else {
       document.exitFullscreen().catch(() => {});
@@ -614,51 +620,54 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     const base: React.CSSProperties = {
       transform: isMirrored ? 'scaleX(-1)' : 'none',
       backgroundColor: '#050811',
+      width: '100%',
+      height: '100%',
     };
 
-    if (fitMode === 'cover') {
-      return { ...base, width: '100%', height: '100%', objectFit: 'cover' };
+    if (fitMode === 'fill') {
+      return { ...base, objectFit: 'fill' };
     }
     if (fitMode === 'contain') {
-      return { ...base, width: '100%', height: '100%', objectFit: 'contain' };
+      return { ...base, objectFit: 'contain' };
     }
-    if (fitMode === 'fill') {
-      return { ...base, width: '100%', height: '100%', objectFit: 'fill' };
+    if (fitMode === 'cover') {
+      return { ...base, objectFit: 'cover' };
     }
     if (fitMode === '16:9') {
-      return { ...base, width: '100%', height: '100%', aspectRatio: '16/9', objectFit: 'cover' };
+      return { ...base, aspectRatio: '16/9', objectFit: 'cover' };
     }
     if (fitMode === '4:3') {
-      return { ...base, width: '100%', height: '100%', aspectRatio: '4/3', objectFit: 'cover' };
+      return { ...base, aspectRatio: '4/3', objectFit: 'cover' };
     }
-    return base;
+    return { ...base, objectFit: 'fill' };
   };
 
   return (
     <div
+      ref={containerRef}
       onContextMenu={(e) => e.preventDefault()}
-      className="w-full h-full flex-1 flex flex-col min-h-0 bg-[#070b14] rounded-2xl border border-slate-800 p-2 select-none gap-2 shadow-2xl overflow-hidden font-mono-code"
+      className="w-full h-full flex-1 flex flex-col min-h-0 bg-[#070b14] rounded-2xl border border-slate-800 p-1.5 select-none gap-1.5 shadow-2xl overflow-hidden font-mono-code"
     >
-      {/* ── TOP CONTROL BAR ── */}
-      <div className="shrink-0 flex items-center justify-between flex-wrap gap-2 bg-[#0c1222] border border-slate-800 rounded-xl px-3 py-2">
+      {/* ── TOP COMPACT CONTROL BAR ── */}
+      <div className="shrink-0 flex items-center justify-between flex-wrap gap-1.5 bg-[#0c1222] border border-slate-800 rounded-xl px-2.5 py-1.5">
         {/* Left: Status & Hit Stats */}
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center">
-            <Target className={`w-4 h-4 ${isActive ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center">
+            <Target className={`w-3.5 h-3.5 ${isActive ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h2 className="font-display font-black text-xs sm:text-sm text-white tracking-wide">
-                FINGERTIP AIR DRUMMING
+                AIR DRUM STAGE
               </h2>
               {isAiLoaded ? (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/50 flex items-center gap-1 shadow-sm">
                   <CheckCircle2 className="w-3 h-3 text-cyan-400" />
-                  TIP-LOCKED AI
+                  FULLSCREEN AI
                 </span>
               ) : (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                  INITIALIZING...
+                  CONNECTING...
                 </span>
               )}
               {totalHits > 0 && (
@@ -677,47 +686,47 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         {/* Center: Camera Dimension & Fit Mode Dropdown + Flinch Sensitivity Slider */}
         <div className="flex items-center gap-2 flex-wrap">
           {/* Layout Dimension Selector */}
-          <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2.5 py-1 rounded-xl text-xs">
-            <Tv className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">FIT:</span>
+          <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2 py-1 rounded-xl text-xs">
+            <Tv className="w-3 h-3 text-cyan-400 shrink-0" />
+            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">SCALE:</span>
             <select
               value={fitMode}
               onChange={(e) => setFitMode(e.target.value as FitMode)}
               className="bg-transparent text-cyan-300 text-[11px] font-black outline-none cursor-pointer"
               title="Change Camera Framing & Scale"
             >
-              <option value="cover" className="bg-slate-900 text-white">Fill & Cover (Max Stage)</option>
-              <option value="contain" className="bg-slate-900 text-white">Fit Entire Sensor</option>
-              <option value="fill" className="bg-slate-900 text-white">Stretch to Edges</option>
+              <option value="fill" className="bg-slate-900 text-white">Full Screen Edge-to-Edge (100% Reach)</option>
+              <option value="cover" className="bg-slate-900 text-white">Zoom & Fill (Crop Edges)</option>
+              <option value="contain" className="bg-slate-900 text-white">Letterbox Fit Entire Sensor</option>
               <option value="16:9" className="bg-slate-900 text-white">16:9 Widescreen</option>
               <option value="4:3" className="bg-slate-900 text-white">4:3 Standard</option>
             </select>
           </div>
 
           {/* Roll & Flinch Sensitivity Slider */}
-          <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2.5 py-1 rounded-xl text-xs">
-            <Gauge className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">ROLL SENS:</span>
+          <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2 py-1 rounded-xl text-xs">
+            <Gauge className="w-3 h-3 text-amber-400 shrink-0" />
+            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">SENS:</span>
             <input
               type="range"
               min="30"
               max="95"
               value={motionSensitivity}
               onChange={(e) => setMotionSensitivity(Number(e.target.value))}
-              className="w-16 sm:w-24 accent-amber-400 cursor-pointer h-1.5"
+              className="w-16 sm:w-20 accent-amber-400 cursor-pointer h-1.5"
               title={`Roll Sensitivity: ${motionSensitivity}%`}
             />
-            <span className="text-[10px] font-bold text-amber-300 w-6">{motionSensitivity}%</span>
+            <span className="text-[10px] font-bold text-amber-300 w-5">{motionSensitivity}%</span>
           </div>
 
           {/* Camera Device Switcher */}
           {availableDevices.length > 1 && !isVirtualCam && (
             <div className="flex items-center gap-1.5 bg-black/60 border border-slate-700 px-2 py-1 rounded-xl text-xs">
-              <Video className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <Video className="w-3 h-3 text-cyan-400 shrink-0" />
               <select
                 value={selectedDeviceId}
                 onChange={(e) => handleDeviceChange(e.target.value)}
-                className="bg-transparent text-slate-200 text-[11px] font-bold outline-none cursor-pointer max-w-[130px] truncate"
+                className="bg-transparent text-slate-200 text-[11px] font-bold outline-none cursor-pointer max-w-[110px] truncate"
                 title="Select Camera"
               >
                 {availableDevices.map((d, idx) => (
@@ -731,15 +740,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         </div>
 
         {/* Right: Master Control Buttons */}
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {/* Virtual Cam Pattern Test */}
           {!isActive && (
             <button
               onClick={startVirtualCamera}
-              className="px-2.5 py-1.5 rounded-xl bg-purple-950/80 hover:bg-purple-900 border border-purple-500/50 text-purple-300 text-[11px] font-bold flex items-center gap-1 transition-all"
+              className="px-2 py-1 rounded-xl bg-purple-950/80 hover:bg-purple-900 border border-purple-500/50 text-purple-300 text-[11px] font-bold flex items-center gap-1 transition-all"
               title="Test with Virtual Camera Pattern"
             >
-              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+              <Sparkles className="w-3 h-3 text-purple-400" />
               <span>TEST PATTERN</span>
             </button>
           )}
@@ -748,7 +757,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           {isActive && videoStats.paused && (
             <button
               onClick={forcePlayVideo}
-              className="px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-[11px] font-bold flex items-center gap-1 shadow-md animate-pulse"
+              className="px-2 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-[11px] font-bold flex items-center gap-1 shadow-md animate-pulse"
               title="Click to unfreeze video"
             >
               <Play className="w-3 h-3 fill-current" />
@@ -759,7 +768,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           {/* Toggle Drum Zones Overlay */}
           <button
             onClick={() => setShowZones((prev) => !prev)}
-            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-1 ${
+            className={`px-2 py-1 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-1 ${
               showZones
                 ? 'bg-cyan-950/70 border-cyan-500/50 text-cyan-300'
                 : 'bg-slate-800 border-slate-700 text-slate-400'
@@ -767,13 +776,13 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             title="Toggle Drum Zones Overlay"
           >
             <Layers className="w-3 h-3" />
-            <span>{showZones ? 'ZONES: ON' : 'ZONES: OFF'}</span>
+            <span>{showZones ? 'ZONES' : 'OFF'}</span>
           </button>
 
           {/* Mirror Toggle */}
           <button
             onClick={() => setIsMirrored((prev) => !prev)}
-            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-1 ${
+            className={`px-2 py-1 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-1 ${
               isMirrored
                 ? 'bg-slate-800 border-slate-700 text-slate-300'
                 : 'bg-indigo-950/70 border-indigo-500/50 text-indigo-300'
@@ -788,22 +797,22 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           {isActive ? (
             <button
               onClick={stopCamera}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl font-display font-bold text-xs bg-red-950 hover:bg-red-900 text-red-200 border border-red-500/50 transition-all shadow-md"
+              className="flex items-center gap-1 px-3.5 py-1 rounded-xl font-display font-bold text-xs bg-red-950 hover:bg-red-900 text-red-200 border border-red-500/50 transition-all shadow-md"
             >
-              <Square className="w-3.5 h-3.5 fill-current" />
-              <span>STOP CAMERA</span>
+              <Square className="w-3 h-3 fill-current" />
+              <span>STOP</span>
             </button>
           ) : (
             <button
               onClick={() => startCamera()}
               disabled={isStarting}
-              className={`flex items-center gap-1.5 px-5 py-1.5 rounded-xl font-display font-black text-xs transition-all shadow-md ${
+              className={`flex items-center gap-1 px-4 py-1 rounded-xl font-display font-black text-xs transition-all shadow-md ${
                 isStarting
                   ? 'bg-slate-800 text-slate-400 cursor-not-allowed'
                   : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-black shadow-[0_0_15px_rgba(16,185,129,0.5)] hover:scale-105'
               }`}
             >
-              <Camera className="w-4 h-4" />
+              <Camera className="w-3.5 h-3.5" />
               <span>{isStarting ? 'CONNECTING...' : 'START CAMERA'}</span>
             </button>
           )}
@@ -811,26 +820,27 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           {/* Diagnostics toggle */}
           <button
             onClick={() => setShowDiag((prev) => !prev)}
-            className={`p-1.5 rounded-xl border text-xs ${showDiag ? 'bg-amber-950 text-amber-300 border-amber-500' : 'bg-slate-800 text-slate-400 border-slate-700'}`}
+            className={`p-1 rounded-xl border text-xs ${showDiag ? 'bg-amber-950 text-amber-300 border-amber-500' : 'bg-slate-800 text-slate-400 border-slate-700'}`}
             title="Toggle Live Telemetry"
           >
             <Activity className="w-3.5 h-3.5" />
           </button>
 
-          {/* Fullscreen Toggle */}
+          {/* Fullscreen Stage Toggle */}
           <button
             onClick={toggleFullscreen}
-            className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs"
-            title="Toggle Fullscreen"
+            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-black font-black text-xs shadow-md transition-all hover:scale-105"
+            title="Enter Full Screen Stage"
           >
-            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Expand className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{isFullscreen ? 'EXIT' : 'FULLSCREEN'}</span>
           </button>
         </div>
       </div>
 
       {/* ── BLACK STREAM HARDWARE WARNING ── */}
       {isBlackStream && isActive && !isVirtualCam && (
-        <div className="shrink-0 p-3 rounded-xl bg-amber-950/90 border border-amber-500 text-amber-200 text-xs flex items-center justify-between gap-2 shadow-lg animate-pulse">
+        <div className="shrink-0 p-2.5 rounded-xl bg-amber-950/90 border border-amber-500 text-amber-200 text-xs flex items-center justify-between gap-2 shadow-lg animate-pulse">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
             <span>
@@ -848,7 +858,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
       {/* ── ERROR NOTICE BANNER ── */}
       {cameraError && (
-        <div className="shrink-0 p-3 rounded-xl bg-red-950/90 border border-red-500 text-red-200 text-xs flex items-center justify-between gap-2 shadow-lg">
+        <div className="shrink-0 p-2.5 rounded-xl bg-red-950/90 border border-red-500 text-red-200 text-xs flex items-center justify-between gap-2 shadow-lg">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
             <span>{cameraError}</span>
@@ -872,17 +882,17 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
       {/* ── LIVE TELEMETRY DRAWER ── */}
       {showDiag && (
-        <div className="shrink-0 p-2.5 rounded-xl bg-black/90 border border-slate-700 text-[11px] text-slate-300 grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <div className="shrink-0 p-2 rounded-xl bg-black/90 border border-slate-700 text-[11px] text-slate-300 grid grid-cols-2 sm:grid-cols-5 gap-2">
           <div>Stream: <b className={isActive ? 'text-emerald-400' : 'text-slate-500'}>{isActive ? `60 FPS (${resolution})` : 'OFF'}</b></div>
-          <div>AI Status: <b className={isAiLoaded ? 'text-cyan-400' : 'text-amber-400'}>{isAiLoaded ? 'TIP-LOCKED' : 'LOADING'}</b></div>
+          <div>AI Status: <b className={isAiLoaded ? 'text-cyan-400' : 'text-amber-400'}>{isAiLoaded ? 'FULL REACH' : 'LOADING'}</b></div>
           <div>Sens: <b className="text-amber-300">{motionSensitivity}%</b></div>
           <div>Left Tip: <b className="text-cyan-400">{leftTip.active ? `${Math.round(leftTip.x)}%, ${Math.round(leftTip.y)}%` : 'Not Detected'}</b></div>
           <div>Right Tip: <b className="text-orange-400">{rightTip.active ? `${Math.round(rightTip.x)}%, ${Math.round(rightTip.y)}%` : 'Not Detected'}</b></div>
         </div>
       )}
 
-      {/* ── AIR DRUM VIEWPORT WITH STRICT FINGERTIP TARGET DOTS ── */}
-      <div className="relative w-full flex-1 min-h-[350px] rounded-2xl border-2 border-slate-800 bg-[#050811] overflow-hidden flex items-center justify-center">
+      {/* ── FULLSCREEN AIR DRUM VIEWPORT (100% UNCLIPPED BOUNDS) ── */}
+      <div className="relative w-full flex-1 min-h-0 rounded-2xl border-2 border-slate-800 bg-[#050811] overflow-hidden flex items-center justify-center">
         {/* Native HTML5 Video Element */}
         <video
           ref={(el) => {
@@ -906,7 +916,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </div>
             <div>
               <p className="font-bold text-white text-sm">Camera is currently inactive</p>
-              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" to begin fingertip air drumming</p>
+              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" to begin fullscreen fingertip air drumming</p>
             </div>
             <div className="flex items-center gap-2 mt-2">
               <button
@@ -951,13 +961,13 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
                     width: `${zone.widthPct}%`,
                     height: `${zone.heightPct}%`,
                     border: isFlashing 
-                      ? '3px solid #ffffff' 
+                      ? '3.5px solid #ffffff' 
                       : `1.5px dashed ${color}88`,
                     backgroundColor: isFlashing 
                       ? 'rgba(255,255,255,0.45)' 
                       : 'rgba(0,0,0,0.18)',
                     boxShadow: isFlashing 
-                      ? '0 0 35px #ffffff, inset 0 0 25px #ffffff' 
+                      ? '0 0 40px #ffffff, inset 0 0 30px #ffffff' 
                       : `0 0 10px ${color}20`,
                   }}
                   className="rounded-2xl cursor-pointer flex flex-col items-center justify-between p-2 select-none transition-all hover:bg-white/10 group backdrop-blur-[1px]"
@@ -1055,7 +1065,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       </div>
 
       {/* ── QUICK TAP DRUM BUTTONS BAR ── */}
-      <div className="shrink-0 flex items-center justify-between gap-2 bg-[#0c1222] border border-slate-800 rounded-xl px-3 py-2 overflow-x-auto">
+      <div className="shrink-0 flex items-center justify-between gap-2 bg-[#0c1222] border border-slate-800 rounded-xl px-3 py-1.5 overflow-x-auto">
         <span className="text-[11px] font-bold text-slate-400 whitespace-nowrap">
           🥁 QUICK TEST PADS:
         </span>
@@ -1067,7 +1077,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               <button
                 key={zone.id}
                 onClick={() => fireStrike(zone.id, hand)}
-                className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-transform active:scale-95 ${
+                className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-transform active:scale-95 ${
                   isRight
                     ? 'bg-orange-950/60 border-orange-500/50 text-orange-200 hover:bg-orange-900'
                     : 'bg-cyan-950/60 border-cyan-500/50 text-cyan-200 hover:bg-cyan-900'
