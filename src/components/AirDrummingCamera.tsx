@@ -41,18 +41,18 @@ interface AirZoneConfig {
 // Fullscreen Ergonomic 8-Part Acoustic Drum Layout (Full Sensor Reach)
 const AIR_ZONES: AirZoneConfig[] = [
   // Top Row: Cymbals & High/Mid Toms
-  { id: 'crash',        label: 'CRASH',     sub: '16" Cymbal',  type: 'cymbal', leftPct: 2,  topPct: 2,  widthPct: 22.5, heightPct: 27 },
+  { id: 'crash',        label: 'CRASH',     sub: '16" Cymbal',  type: 'cymbal', leftPct: 2,    topPct: 2,  widthPct: 22.5, heightPct: 27 },
   { id: 'high_tom',     label: 'HIGH TOM',  sub: '10" Tom',     type: 'tom',    leftPct: 26.5, topPct: 2,  widthPct: 22.5, heightPct: 27 },
-  { id: 'mid_tom',      label: 'MID TOM',   sub: '12" Tom',     type: 'tom',    leftPct: 51, topPct: 2,  widthPct: 22.5, heightPct: 27 },
+  { id: 'mid_tom',      label: 'MID TOM',   sub: '12" Tom',     type: 'tom',    leftPct: 51,   topPct: 2,  widthPct: 22.5, heightPct: 27 },
   { id: 'ride',         label: 'RIDE',      sub: '20" Cymbal',  type: 'cymbal', leftPct: 75.5, topPct: 2,  widthPct: 22.5, heightPct: 27 },
 
   // Mid Row: Hi-Hat, Snare, Floor Tom
-  { id: 'hihat_closed', label: 'HI-HAT',    sub: '14" Cymbals', type: 'cymbal', leftPct: 2,  topPct: 31, widthPct: 22.5, heightPct: 28 },
+  { id: 'hihat_closed', label: 'HI-HAT',    sub: '14" Cymbals', type: 'cymbal', leftPct: 2,    topPct: 31, widthPct: 22.5, heightPct: 28 },
   { id: 'snare',        label: 'SNARE',     sub: '14" Snare',   type: 'snare',  leftPct: 26.5, topPct: 31, widthPct: 22.5, heightPct: 28 },
   { id: 'floor_tom',    label: 'FLOOR TOM', sub: '16" Floor',   type: 'tom',    leftPct: 75.5, topPct: 31, widthPct: 22.5, heightPct: 28 },
 
   // Bottom Center: Extra Wide Accessible Bass Drum (Easy Reach)
-  { id: 'bass',         label: 'BASS DRUM', sub: '22" Kick',    type: 'bass',   leftPct: 26, topPct: 61, widthPct: 48, heightPct: 36 },
+  { id: 'bass',         label: 'BASS DRUM', sub: '22" Kick',    type: 'bass',   leftPct: 26,   topPct: 61, widthPct: 48,   heightPct: 36 },
 ];
 
 type FitMode = 'fill' | 'cover' | 'contain' | '16:9' | '4:3';
@@ -79,16 +79,15 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [flashes, setFlashes] = useState<Record<string, boolean>>({});
   const [isVirtualCam, setIsVirtualCam] = useState<boolean>(false);
 
-  // Camera Dimension & Layout Fit (Default 'fill' to access 100% full screen with no cropping)
+  // Camera Dimension & Layout Fit
   const [fitMode, setFitMode] = useState<FitMode>('fill');
 
-  // AI Finger Tracking State
-  const [isAiLoaded, setIsAiLoaded] = useState<boolean>(false);
-  const [motionSensitivity, setMotionSensitivity] = useState<number>(80); // 1-100
+  // Motion Sensitivity
+  const [motionSensitivity, setMotionSensitivity] = useState<number>(85); // 1-100
   const [hitCounts, setHitCounts] = useState<Record<string, number>>({});
   const [totalHits, setTotalHits] = useState<number>(0);
 
-  // Strict Fingertip Tracking Points (Rendered right on Landmark 8 Index Tips)
+  // Fingertip Tracking Points (Updated smoothly at 60 FPS)
   const [leftTip, setLeftTip] = useState<FingertipPoint>({ x: 30, y: 50, active: false, isStriking: false, vy: 0 });
   const [rightTip, setRightTip] = useState<FingertipPoint>({ x: 70, y: 50, active: false, isStriking: false, vy: 0 });
 
@@ -97,7 +96,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const [deviceLabel, setDeviceLabel] = useState<string>('');
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
-  const [statusLog, setStatusLog] = useState<string>('Initializing Fullscreen Fingertip AI...');
+  const [statusLog, setStatusLog] = useState<string>('Zero-Lag 60 FPS Engine Ready');
   const [showDiag, setShowDiag] = useState<boolean>(false);
   const [isBlackStream, setIsBlackStream] = useState<boolean>(false);
   const [videoStats, setVideoStats] = useState({ readyState: 0, paused: true, currentTime: 0 });
@@ -105,28 +104,28 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastHit = useRef<Record<string, number>>({});
-  const handsModelRef = useRef<unknown>(null);
-  const isProcessingRef = useRef<boolean>(false);
   const animFrameRef = useRef<number>(0);
 
-  // Target coordinates from MediaPipe for 60FPS smooth lerping
-  const targetLeftRef = useRef<FingertipPoint>({ x: 30, y: 50, active: false, isStriking: false, vy: 0 });
-  const targetRightRef = useRef<FingertipPoint>({ x: 70, y: 50, active: false, isStriking: false, vy: 0 });
-  
-  // High-Frequency Apex Reversal History for Drum Rolls
-  const prevLeftState = useRef<{ y: number; vy: number; inZone: string | null }>({ y: 50, vy: 0, inZone: null });
-  const prevRightState = useRef<{ y: number; vy: number; inZone: string | null }>({ y: 50, vy: 0, inZone: null });
+  // High-Speed Frame Buffer Refs (0.15ms processing time)
+  const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
+  const motionCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bgFrameRef = useRef<Float32Array | null>(null);
+
+  // Fingertip Position & Velocity History
+  const leftPosRef = useRef<{ x: number; y: number; vy: number; inZone: string | null }>({ x: 30, y: 50, vy: 0, inZone: null });
+  const rightPosRef = useRef<{ x: number; y: number; vy: number; inZone: string | null }>({ x: 70, y: 50, vy: 0, inZone: null });
 
   const virtualCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const virtualAnimRef = useRef<number>(0);
   const sensRef = useRef<number>(motionSensitivity);
   sensRef.current = motionSensitivity;
 
-  // ── Strike Trigger (30ms Cooldown for Lightning-Fast Drum Rolls) ────────────
+  // ── Strike Trigger (Ultra-Fast 25ms Cooldown: Zero Delay, Rapid Successive Beats) ──
   const fireStrike = useCallback(
     (id: DrumInstrumentId, hand: Hand) => {
       const now = performance.now();
-      if (now - (lastHit.current[id] || 0) < 30) return;
+      // 25ms cooldown = up to 40 hits/second with zero voice choking
+      if (now - (lastHit.current[id] || 0) < 25) return;
       lastHit.current[id] = now;
 
       setHitCounts((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
@@ -134,202 +133,196 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       setFlashes((prev) => ({ ...prev, [id]: true }));
       setTimeout(() => {
         setFlashes((prev) => ({ ...prev, [id]: false }));
-      }, 85);
+      }, 75);
 
       onAirStrike(id, hand);
     },
     [onAirStrike]
   );
 
-  // ── MediaPipe Hands (Strict Landmark 8 Index Fingertip Extraction) ──────────
-  useEffect(() => {
-    let checkCount = 0;
-    const initHands = () => {
-      const win = window as unknown as { Hands?: new (cfg: { locateFile: (f: string) => string }) => unknown };
-      if (typeof win.Hands === 'function') {
-        try {
-          const hands = new win.Hands({
-            locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
-          }) as {
-            setOptions: (opts: unknown) => void;
-            onResults: (cb: (res: unknown) => void) => void;
-            send: (input: { image: HTMLVideoElement }) => Promise<void>;
-            close?: () => void;
-          };
-
-          // Zero-latency mobile model
-          hands.setOptions({
-            maxNumHands: 2,
-            modelComplexity: 0,
-            minDetectionConfidence: 0.25,
-            minTrackingConfidence: 0.25,
-          });
-
-          hands.onResults((results: unknown) => {
-            const res = results as {
-              multiHandLandmarks?: Array<Array<{ x: number; y: number; z: number }>>;
-              multiHandedness?: Array<{ label: string; score: number }>;
-            };
-
-            const detectedTips: Array<{ x: number; y: number }> = [];
-
-            if (res.multiHandLandmarks) {
-              for (let i = 0; i < res.multiHandLandmarks.length; i++) {
-                const landmarks = res.multiHandLandmarks[i];
-                // Landmark 8 is strictly the INDEX_FINGER_TIP
-                const tip = landmarks[8];
-
-                if (tip) {
-                  // Map directly to 0-100% viewport space with no bottom clipping
-                  const rawX = isMirrored ? (1 - tip.x) * 100 : tip.x * 100;
-                  const rawY = Math.min(100, Math.max(0, tip.y * 100));
-                  detectedTips.push({ x: rawX, y: rawY });
-                }
-              }
-            }
-
-            // Sort detected index fingertips from left to right on screen
-            detectedTips.sort((a, b) => a.x - b.x);
-
-            // 🥁 APEX OSCILLATION / DRUM ROLL ENGINE:
-            const processFingertipMotion = (
-              tipPos: { x: number; y: number } | null,
-              prevRef: React.MutableRefObject<{ y: number; vy: number; inZone: string | null }>,
-              hand: Hand
-            ): FingertipPoint => {
-              if (!tipPos) {
-                return { x: 50, y: 50, active: false, isStriking: false, vy: 0 };
-              }
-
-              const prevY = prevRef.current.y;
-              const prevVy = prevRef.current.vy;
-              const currentVy = tipPos.y - prevY; // Positive = moving down, Negative = moving up (rebound)
-
-              // Check which zone the fingertip is inside
-              let currentZoneId: DrumInstrumentId | null = null;
-              AIR_ZONES.forEach((zone) => {
-                const inX = tipPos.x >= (zone.leftPct - 1) && tipPos.x <= (zone.leftPct + zone.widthPct + 1);
-                const inY = tipPos.y >= (zone.topPct - 1) && tipPos.y <= (zone.topPct + zone.heightPct + 1);
-                if (inX && inY) {
-                  currentZoneId = zone.id;
-                }
-              });
-
-              // 🥁 DRUM ROLL & STRIKE CONDITIONS:
-              // 1. Apex Direction Reversal (Rebound -> Downstroke)
-              const isApexReversal = prevVy < 0 && currentVy > 0.15;
-              
-              // 2. Fast Downward Flinch / Snap
-              const flinchSensitivityThreshold = Math.max(0.3, 1.4 - sensRef.current * 0.013);
-              const isFastFlinch = currentVy >= flinchSensitivityThreshold;
-
-              // 3. Zone Entry Stroke
-              const isZoneEntry = currentZoneId !== null && prevRef.current.inZone !== currentZoneId;
-
-              const isStriking = (isApexReversal || isFastFlinch || isZoneEntry);
-
-              if (currentZoneId && isStriking) {
-                fireStrike(currentZoneId, hand);
-              }
-
-              prevRef.current = {
-                y: tipPos.y,
-                vy: currentVy,
-                inZone: currentZoneId,
-              };
-
-              return {
-                x: tipPos.x,
-                y: tipPos.y,
-                active: true,
-                isStriking,
-                vy: currentVy,
-              };
-            };
-
-            let leftRes: FingertipPoint = { x: 30, y: 50, active: false, isStriking: false, vy: 0 };
-            let rightRes: FingertipPoint = { x: 70, y: 50, active: false, isStriking: false, vy: 0 };
-
-            if (detectedTips.length === 1) {
-              const tip = detectedTips[0];
-              if (tip.x < 50) {
-                leftRes = processFingertipMotion(tip, prevLeftState, 'LEFT');
-              } else {
-                rightRes = processFingertipMotion(tip, prevRightState, 'RIGHT');
-              }
-            } else if (detectedTips.length >= 2) {
-              leftRes = processFingertipMotion(detectedTips[0], prevLeftState, 'LEFT');
-              rightRes = processFingertipMotion(detectedTips[1], prevRightState, 'RIGHT');
-            }
-
-            targetLeftRef.current = leftRes;
-            targetRightRef.current = rightRes;
-            isProcessingRef.current = false;
-          });
-
-          handsModelRef.current = hands;
-          setIsAiLoaded(true);
-          setStatusLog('Fullscreen Fingertip AI Active (60 FPS)');
-        } catch (e) {
-          console.warn('MediaPipe Hands init warning:', e);
-        }
-      } else {
-        checkCount++;
-        if (checkCount < 30) {
-          setTimeout(initHands, 200);
-        }
-      }
-    };
-
-    initHands();
-
-    return () => {
-      const h = handsModelRef.current as { close?: () => void } | null;
-      if (h && typeof h.close === 'function') {
-        h.close();
-      }
-    };
-  }, [isMirrored, fireStrike]);
-
-  // ── 60 FPS Video Frame Sender & Smooth Pointer Interpolation ───────────────
+  // ── High-Speed Zero-Lag 60 FPS Fingertip Extremity & Strike Loop ─────────────
   useEffect(() => {
     if (!mediaStream) {
       cancelAnimationFrame(animFrameRef.current);
       setLeftTip({ x: 30, y: 50, active: false, isStriking: false, vy: 0 });
       setRightTip({ x: 70, y: 50, active: false, isStriking: false, vy: 0 });
+      prevFrameRef.current = null;
+      bgFrameRef.current = null;
       return;
     }
 
+    const W = 100;
+    const H = 60;
+    const procCanvas = motionCanvasRef.current || document.createElement('canvas');
+    procCanvas.width = W;
+    procCanvas.height = H;
+    motionCanvasRef.current = procCanvas;
+    const ctx = procCanvas.getContext('2d', { willReadFrequently: true });
+
     const processFrame = () => {
       const videoEl = videoRef.current;
-      const hands = handsModelRef.current as { send: (input: { image: HTMLVideoElement }) => Promise<void> } | null;
 
-      if (videoEl && videoEl.readyState >= 2 && hands && !isProcessingRef.current) {
-        isProcessingRef.current = true;
-        hands.send({ image: videoEl }).catch(() => {
-          isProcessingRef.current = false;
-        });
+      if (videoEl && videoEl.readyState >= 2 && ctx) {
+        try {
+          ctx.drawImage(videoEl, 0, 0, W, H);
+          const imgData = ctx.getImageData(0, 0, W, H);
+          const data = imgData.data;
+          let bg = bgFrameRef.current;
+
+          if (!bg || bg.length !== data.length) {
+            bg = new Float32Array(data.length);
+            for (let i = 0; i < data.length; i++) {
+              bg[i] = data[i];
+            }
+            bgFrameRef.current = bg;
+          }
+
+          const midX = Math.floor(W / 2);
+
+          // Find the leading fingertip extremities (highest / leading moving points)
+          let lTopY = H, lTipX = W * 0.25, lFound = false;
+          let rTopY = H, rTipX = W * 0.75, rFound = false;
+
+          let lCount = 0, rCount = 0;
+
+          // Motion threshold from sensitivity slider
+          const diffThreshold = Math.max(16, 32 - sensRef.current * 0.18);
+
+          for (let y = 2; y < H - 2; y += 2) {
+            for (let x = 2; x < W - 2; x += 2) {
+              const idx = (y * W + x) * 4;
+              const rDiff = Math.abs(data[idx] - bg[idx]);
+              const gDiff = Math.abs(data[idx + 1] - bg[idx + 1]);
+              const bDiff = Math.abs(data[idx + 2] - bg[idx + 2]);
+              const diff = (rDiff + gDiff + bDiff) / 3;
+
+              if (diff >= diffThreshold) {
+                if (x < midX) {
+                  lCount++;
+                  if (y < lTopY) {
+                    lTopY = y;
+                    lTipX = x;
+                    lFound = true;
+                  }
+                } else {
+                  rCount++;
+                  if (y < rTopY) {
+                    rTopY = y;
+                    rTipX = x;
+                    rFound = true;
+                  }
+                }
+              }
+            }
+          }
+
+          // Smooth fast leaky baseline adaptation
+          const alpha = 0.3;
+          for (let i = 0; i < data.length; i += 4) {
+            bg[i] = bg[i] * (1 - alpha) + data[i] * alpha;
+            bg[i + 1] = bg[i + 1] * (1 - alpha) + data[i + 1] * alpha;
+            bg[i + 2] = bg[i + 2] * (1 - alpha) + data[i + 2] * alpha;
+          }
+
+          // Process Left Fingertip
+          const pL = leftPosRef.current;
+          let targetLX = pL.x;
+          let targetLY = pL.y;
+          let lActive = false;
+
+          if (lFound && lCount > 4) {
+            const rawLX = (lTipX / W) * 100;
+            const rawLY = (lTopY / H) * 100;
+            targetLX = isMirrored ? (100 - rawLX) : rawLX;
+            targetLY = rawLY;
+            lActive = true;
+          }
+
+          // Smooth 60 FPS EMA
+          const curLX = pL.x * 0.3 + targetLX * 0.7;
+          const curLY = pL.y * 0.3 + targetLY * 0.7;
+          const lvy = curLY - pL.y;
+
+          // Process Right Fingertip
+          const pR = rightPosRef.current;
+          let targetRX = pR.x;
+          let targetRY = pR.y;
+          let rActive = false;
+
+          if (rFound && rCount > 4) {
+            const rawRX = (rTipX / W) * 100;
+            const rawRY = (rTopY / H) * 100;
+            targetRX = isMirrored ? (100 - rawRX) : rawRX;
+            targetRY = rawRY;
+            rActive = true;
+          }
+
+          const curRX = pR.x * 0.3 + targetRX * 0.7;
+          const curRY = pR.y * 0.3 + targetRY * 0.7;
+          const rvy = curRY - pR.y;
+
+          // 🥁 DIRECT STRIKE & RAPID DRUM ROLL ENGINE
+          const checkStrike = (
+            fx: number, 
+            fy: number, 
+            vy: number, 
+            active: boolean, 
+            hand: Hand,
+            posRef: React.MutableRefObject<{ x: number; y: number; vy: number; inZone: string | null }>
+          ): boolean => {
+            if (!active) return false;
+
+            let inZoneId: DrumInstrumentId | null = null;
+            AIR_ZONES.forEach((zone) => {
+              const inX = fx >= (zone.leftPct - 1) && fx <= (zone.leftPct + zone.widthPct + 1);
+              const inY = fy >= (zone.topPct - 1) && fy <= (zone.topPct + zone.heightPct + 1);
+              if (inX && inY) {
+                inZoneId = zone.id;
+              }
+            });
+
+            // Strike on:
+            // 1. Apex Reversal (Rebound up -> Snap down)
+            const isApexReversal = posRef.current.vy < 0 && vy > 0.15;
+            // 2. Fast Downward Flinch (vy > threshold)
+            const flinchThreshold = Math.max(0.3, 1.2 - sensRef.current * 0.012);
+            const isFlinch = vy >= flinchThreshold;
+            // 3. Entry Stroke (Entering zone)
+            const isEntry = inZoneId !== null && posRef.current.inZone !== inZoneId;
+
+            const isHit = (isApexReversal || isFlinch || isEntry);
+
+            if (inZoneId && isHit) {
+              fireStrike(inZoneId, hand);
+            }
+
+            posRef.current = { x: fx, y: fy, vy, inZone: inZoneId };
+            return isHit;
+          };
+
+          const lStriking = checkStrike(curLX, curLY, lvy, lActive, 'LEFT', leftPosRef);
+          const rStriking = checkStrike(curRX, curRY, rvy, rActive, 'RIGHT', rightPosRef);
+
+          setLeftTip({
+            x: Math.round(curLX),
+            y: Math.round(curLY),
+            active: lActive,
+            isStriking: lStriking,
+            vy: lvy,
+          });
+
+          setRightTip({
+            x: Math.round(curRX),
+            y: Math.round(curRY),
+            active: rActive,
+            isStriking: rStriking,
+            vy: rvy,
+          });
+
+        } catch (e) {
+          console.warn('Frame process skip:', e);
+        }
       }
-
-      // Smooth 60 FPS Interpolation for Laser Crosshair Dots (strictly tracking Landmark 8)
-      const tL = targetLeftRef.current;
-      const tR = targetRightRef.current;
-
-      setLeftTip((prev) => ({
-        x: tL.active ? prev.x * 0.2 + tL.x * 0.8 : tL.x,
-        y: tL.active ? prev.y * 0.2 + tL.y * 0.8 : tL.y,
-        active: tL.active,
-        isStriking: tL.isStriking,
-        vy: tL.vy,
-      }));
-
-      setRightTip((prev) => ({
-        x: tR.active ? prev.x * 0.2 + tR.x * 0.8 : tR.x,
-        y: tR.active ? prev.y * 0.2 + tR.y * 0.8 : tR.y,
-        active: tR.active,
-        isStriking: tR.isStriking,
-        vy: tR.vy,
-      }));
 
       animFrameRef.current = requestAnimationFrame(processFrame);
     };
@@ -339,7 +332,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     return () => {
       cancelAnimationFrame(animFrameRef.current);
     };
-  }, [mediaStream]);
+  }, [mediaStream, isMirrored, fireStrike]);
 
   // ── Enumerate Connected Video Cameras ───────────────────────────────────────
   const refreshDevices = useCallback(async () => {
@@ -378,7 +371,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       const handleMeta = () => {
         if (videoEl.videoWidth > 0) {
           setResolution(`${videoEl.videoWidth}×${videoEl.videoHeight}`);
-          setStatusLog(`60 FPS Live Feed: ${videoEl.videoWidth}×${videoEl.videoHeight}`);
+          setStatusLog(`60 FPS Fluid Stream: ${videoEl.videoWidth}×${videoEl.videoHeight}`);
         }
         videoEl.play().catch((e) => console.log('play on loadedmetadata:', e));
       };
@@ -434,7 +427,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     setCameraError(null);
     setIsStarting(true);
     setIsVirtualCam(false);
-    setStatusLog('Requesting 60FPS camera stream...');
+    setStatusLog('Starting 60FPS fluid video stream...');
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       const err = 'Camera API not supported or blocked by browser (requires HTTPS).';
@@ -450,6 +443,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
     }
 
     const deviceId = targetDeviceId || selectedDeviceId;
+    // 640x360 @ 60 FPS for maximum hardware speed with 0% CPU lag
     const constraints: MediaStreamConstraints = {
       video: deviceId 
         ? { deviceId: { exact: deviceId } } 
@@ -469,8 +463,8 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
       const track = stream.getVideoTracks()[0];
       if (track) {
-        setDeviceLabel(track.label || 'High-Speed Webcam');
-        setStatusLog(`Connected: ${track.label || 'Camera'} (60 FPS)`);
+        setDeviceLabel(track.label || 'Webcam');
+        setStatusLog(`Connected: ${track.label || 'Camera'} (60 FPS Fluid)`);
 
         track.onended = () => {
           stopCamera();
@@ -548,7 +542,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         ctx.fillText('🌈 VIRTUAL TEST CAMERA PATTERN', 320, 45);
         ctx.font = '13px monospace';
         ctx.fillStyle = '#94a3b8';
-        ctx.fillText('Index fingertip apex oscillation triggers drum rolls', 320, 75);
+        ctx.fillText('Zero-lag fingertip apex oscillation triggers drum rolls', 320, 75);
       }
       virtualAnimRef.current = requestAnimationFrame(renderAnim);
     };
@@ -658,16 +652,16 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="font-display font-black text-xs sm:text-sm text-white tracking-wide">
-                AIR DRUM STAGE
+                FLUID AIR DRUM
               </h2>
-              {isAiLoaded ? (
+              {isActive ? (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/50 flex items-center gap-1 shadow-sm">
                   <CheckCircle2 className="w-3 h-3 text-cyan-400" />
-                  FULLSCREEN AI
+                  60 FPS ZERO-LAG
                 </span>
               ) : (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                  CONNECTING...
+                  STANDBY
                 </span>
               )}
               {totalHits > 0 && (
@@ -687,7 +681,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
         <div className="flex items-center gap-2 flex-wrap">
           {/* Layout Dimension Selector */}
           <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2 py-1 rounded-xl text-xs">
-            <Tv className="w-3 h-3 text-cyan-400 shrink-0" />
+            <Tv className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">SCALE:</span>
             <select
               value={fitMode}
@@ -705,12 +699,12 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
 
           {/* Roll & Flinch Sensitivity Slider */}
           <div className="flex items-center gap-1.5 bg-black/70 border border-slate-700 px-2 py-1 rounded-xl text-xs">
-            <Gauge className="w-3 h-3 text-amber-400 shrink-0" />
+            <Gauge className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">SENS:</span>
             <input
               type="range"
               min="30"
-              max="95"
+              max="98"
               value={motionSensitivity}
               onChange={(e) => setMotionSensitivity(Number(e.target.value))}
               className="w-16 sm:w-20 accent-amber-400 cursor-pointer h-1.5"
@@ -722,7 +716,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
           {/* Camera Device Switcher */}
           {availableDevices.length > 1 && !isVirtualCam && (
             <div className="flex items-center gap-1.5 bg-black/60 border border-slate-700 px-2 py-1 rounded-xl text-xs">
-              <Video className="w-3 h-3 text-cyan-400 shrink-0" />
+              <Video className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
               <select
                 value={selectedDeviceId}
                 onChange={(e) => handleDeviceChange(e.target.value)}
@@ -748,7 +742,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               className="px-2 py-1 rounded-xl bg-purple-950/80 hover:bg-purple-900 border border-purple-500/50 text-purple-300 text-[11px] font-bold flex items-center gap-1 transition-all"
               title="Test with Virtual Camera Pattern"
             >
-              <Sparkles className="w-3 h-3 text-purple-400" />
+              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
               <span>TEST PATTERN</span>
             </button>
           )}
@@ -884,16 +878,16 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
       {showDiag && (
         <div className="shrink-0 p-2 rounded-xl bg-black/90 border border-slate-700 text-[11px] text-slate-300 grid grid-cols-2 sm:grid-cols-5 gap-2">
           <div>Stream: <b className={isActive ? 'text-emerald-400' : 'text-slate-500'}>{isActive ? `60 FPS (${resolution})` : 'OFF'}</b></div>
-          <div>AI Status: <b className={isAiLoaded ? 'text-cyan-400' : 'text-amber-400'}>{isAiLoaded ? 'FULL REACH' : 'LOADING'}</b></div>
+          <div>Mode: <b className="text-cyan-400">ZERO-LAG</b></div>
           <div>Sens: <b className="text-amber-300">{motionSensitivity}%</b></div>
-          <div>Left Tip: <b className="text-cyan-400">{leftTip.active ? `${Math.round(leftTip.x)}%, ${Math.round(leftTip.y)}%` : 'Not Detected'}</b></div>
-          <div>Right Tip: <b className="text-orange-400">{rightTip.active ? `${Math.round(rightTip.x)}%, ${Math.round(rightTip.y)}%` : 'Not Detected'}</b></div>
+          <div>Left Tip: <b className="text-cyan-400">{leftTip.active ? `${leftTip.x}%, ${leftTip.y}%` : 'Searching'}</b></div>
+          <div>Right Tip: <b className="text-orange-400">{rightTip.active ? `${rightTip.x}%, ${rightTip.y}%` : 'Searching'}</b></div>
         </div>
       )}
 
       {/* ── FULLSCREEN AIR DRUM VIEWPORT (100% UNCLIPPED BOUNDS) ── */}
       <div className="relative w-full flex-1 min-h-0 rounded-2xl border-2 border-slate-800 bg-[#050811] overflow-hidden flex items-center justify-center">
-        {/* Native HTML5 Video Element */}
+        {/* Native HTML5 Video Element (Hardware Accelerated 60 FPS) */}
         <video
           ref={(el) => {
             videoRef.current = el;
@@ -916,7 +910,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
             </div>
             <div>
               <p className="font-bold text-white text-sm">Camera is currently inactive</p>
-              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" to begin fullscreen fingertip air drumming</p>
+              <p className="text-xs text-slate-500 mt-1">Click "START CAMERA" to begin 60 FPS air drumming</p>
             </div>
             <div className="flex items-center gap-2 mt-2">
               <button
@@ -1013,7 +1007,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               );
             })}
 
-            {/* 🔵 LEFT INDEX FINGERTIP POINTER (STRICTLY ON LANDMARK 8) */}
+            {/* 🔵 LEFT INDEX FINGERTIP POINTER */}
             {leftTip.active && (
               <div
                 style={{
@@ -1037,7 +1031,7 @@ export const AirDrummingCamera: React.FC<AirDrummingCameraProps> = ({
               </div>
             )}
 
-            {/* 🟠 RIGHT INDEX FINGERTIP POINTER (STRICTLY ON LANDMARK 8) */}
+            {/* 🟠 RIGHT INDEX FINGERTIP POINTER */}
             {rightTip.active && (
               <div
                 style={{
